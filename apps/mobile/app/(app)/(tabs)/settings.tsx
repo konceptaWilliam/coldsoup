@@ -1,9 +1,11 @@
 import { useState } from "react";
-import { View, Text, TextInput, Pressable, ScrollView, Alert, ActivityIndicator } from "react-native";
+import { View, Text, TextInput, Pressable, ScrollView, Alert, ActivityIndicator, Platform } from "react-native";
 import { router } from "expo-router";
 import Constants from "expo-constants";
+import * as ImagePicker from "expo-image-picker";
 import { supabase } from "@/lib/supabase";
 import { trpc } from "@/lib/trpc";
+import { Avatar } from "@/components/Avatar";
 
 function Label({ children }: { children: string }) {
   return (
@@ -19,13 +21,57 @@ export default function SettingsTab() {
   const updateProfile = trpc.profile.update.useMutation({ onSuccess: () => utils.profile.get.invalidate() });
   const [editingName, setEditingName] = useState(false);
   const [name, setName] = useState("");
+  const [uploading, setUploading] = useState(false);
 
   function startEdit() { setName(profile?.display_name ?? ""); setEditingName(true); }
   function saveName() { if (name.trim()) updateProfile.mutate({ displayName: name.trim() }); setEditingName(false); }
 
+  async function pickAvatar() {
+    if (!profile) return;
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"],
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.7,
+    });
+    if (result.canceled || !result.assets[0]) return;
+
+    setUploading(true);
+    try {
+      const uri = result.assets[0].uri;
+      const arrayBuffer = await (await fetch(uri)).arrayBuffer();
+      const path = `${profile.id}/avatar.jpg`;
+      const { error: upErr } = await supabase.storage
+        .from("avatars")
+        .upload(path, arrayBuffer, { upsert: true, contentType: "image/jpeg" });
+      if (upErr) throw upErr;
+
+      const { data: { publicUrl } } = supabase.storage.from("avatars").getPublicUrl(path);
+      await updateProfile.mutateAsync({ avatarUrl: `${publicUrl}?t=${Date.now()}` });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Upload failed";
+      if (Platform.OS === "web") { if (typeof window !== "undefined") window.alert(msg); }
+      else Alert.alert("Upload failed", msg);
+    } finally {
+      setUploading(false);
+    }
+  }
+
   async function handleSignOut() {
     await supabase.auth.signOut();
     router.replace("/(auth)/login");
+  }
+
+  // Alert.alert is a no-op on react-native-web — confirm via window.confirm there.
+  function confirmSignOut() {
+    if (Platform.OS === "web") {
+      if (typeof window !== "undefined" && window.confirm("Sign out?")) handleSignOut();
+      return;
+    }
+    Alert.alert("Sign out", "Are you sure?", [
+      { text: "Cancel", style: "cancel" },
+      { text: "Sign out", style: "destructive", onPress: handleSignOut },
+    ]);
   }
 
   if (isLoading) {
@@ -39,6 +85,22 @@ export default function SettingsTab() {
       </View>
 
       <View style={{ padding: 16, gap: 24 }}>
+        <View>
+          <Label>Photo</Label>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 14 }}>
+            <Avatar name={profile?.display_name ?? "?"} avatarUrl={profile?.avatar_url} size={56} fontSize={18} />
+            <Pressable
+              onPress={pickAvatar}
+              disabled={uploading}
+              style={({ pressed }) => ({ borderWidth: 1, borderColor: "#E2DDD2", backgroundColor: "#F7F4ED", paddingHorizontal: 14, paddingVertical: 10, opacity: pressed || uploading ? 0.4 : 1 })}
+            >
+              <Text style={{ fontFamily: "monospace", fontSize: 12, color: "#1A1A18" }}>
+                {uploading ? "Uploading…" : "Change photo"}
+              </Text>
+            </Pressable>
+          </View>
+        </View>
+
         <View>
           <Label>Display name</Label>
           {editingName ? (
@@ -71,10 +133,7 @@ export default function SettingsTab() {
 
         <View style={{ borderTopWidth: 1, borderTopColor: "#E2DDD2", paddingTop: 24 }}>
           <Pressable
-            onPress={() => Alert.alert("Sign out", "Are you sure?", [
-              { text: "Cancel", style: "cancel" },
-              { text: "Sign out", style: "destructive", onPress: handleSignOut },
-            ])}
+            onPress={confirmSignOut}
             style={({ pressed }) => ({ backgroundColor: "#1A1A18", paddingVertical: 12, alignItems: "center", opacity: pressed ? 0.7 : 1 })}
           >
             <Text style={{ fontFamily: "monospace", fontSize: 13, fontWeight: "500", color: "#F2EFE8" }}>Sign out</Text>

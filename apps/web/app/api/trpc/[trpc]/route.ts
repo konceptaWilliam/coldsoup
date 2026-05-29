@@ -2,8 +2,29 @@ import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { appRouter } from "@/lib/trpc/router";
 import { createContext } from "@/lib/trpc/context";
 
-const handler = (req: Request) =>
-  fetchRequestHandler({
+// Origins allowed to call the API cross-origin (Expo web dev server, app URL).
+const ALLOWED_ORIGINS = new Set(
+  [
+    "http://localhost:8081",
+    "http://localhost:19006",
+    process.env.NEXT_PUBLIC_APP_URL,
+  ].filter(Boolean) as string[]
+);
+
+function corsHeaders(req: Request): Record<string, string> {
+  const origin = req.headers.get("origin");
+  if (!origin || !ALLOWED_ORIGINS.has(origin)) return {};
+  return {
+    "Access-Control-Allow-Origin": origin,
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers": "authorization, content-type",
+    "Access-Control-Max-Age": "86400",
+    Vary: "Origin",
+  };
+}
+
+const handler = async (req: Request) => {
+  const res = await fetchRequestHandler({
     endpoint: "/api/trpc",
     req,
     router: appRouter,
@@ -15,5 +36,14 @@ const handler = (req: Request) =>
           }
         : undefined,
   });
+  for (const [key, value] of Object.entries(corsHeaders(req))) {
+    res.headers.set(key, value);
+  }
+  return res;
+};
+
+export function OPTIONS(req: Request) {
+  return new Response(null, { status: 204, headers: corsHeaders(req) });
+}
 
 export { handler as GET, handler as POST };

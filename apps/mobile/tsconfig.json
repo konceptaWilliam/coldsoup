@@ -4,7 +4,8 @@
     "strict": true,
     "paths": {
       "@/*": [
-        "./*"
+        "./*",
+        "../web/*"
       ],
       "@coldsoup/core": [
         "../../packages/core/src/index.ts"

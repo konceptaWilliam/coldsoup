@@ -37,7 +37,15 @@
           "icon": "./assets/icon.png",
           "color": "#1A1A18"
         }
-      ]
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow Coldsoup to access your photos to share images and set a profile picture.",
+          "cameraPermission": "Allow Coldsoup to use the camera to take photos."
+        }
+      ],
+      "expo-audio"
     ],
     "experiments": {
       "typedRoutes": true

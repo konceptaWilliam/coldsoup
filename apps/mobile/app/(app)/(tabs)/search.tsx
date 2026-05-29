@@ -41,7 +41,7 @@ export default function SearchTab() {
           ...(threads.length > 0 ? [{ type: "header", label: "Threads", id: "h-threads" }] : []),
           ...threads.map((t) => ({ type: "thread", ...t, id: `t-${t.id}` })),
           ...(messages.length > 0 ? [{ type: "header", label: "Messages", id: "h-messages" }] : []),
-          ...messages.map((m) => ({ type: "message", ...m, id: `m-${m.id}` })),
+          ...messages.map((m: { id: string }) => ({ type: "message", ...m, id: `m-${m.id}` })),
         ]}
         keyExtractor={(item) => item.id}
         ListEmptyComponent={
@@ -66,10 +66,10 @@ export default function SearchTab() {
             );
           }
           if (item.type === "thread") {
-            const t = item as { id: string; title: string; status: string; groupId: string; groupName: string };
+            const t = item as unknown as { id: string; title: string; status: string; groupId: string; groupName: string };
             return (
               <Pressable
-                onPress={() => router.push({ pathname: "/(app)/thread/[threadId]", params: { threadId: t.id, title: t.title } })}
+                onPress={() => router.push({ pathname: "/(app)/thread/[threadId]", params: { threadId: t.id, title: t.title, status: t.status, groupId: t.groupId } })}
                 style={({ pressed }) => ({
                   opacity: pressed ? 0.6 : 1,
                   paddingHorizontal: 16,
@@ -92,7 +92,7 @@ export default function SearchTab() {
             );
           }
           if (item.type === "message") {
-            const m = item as { id: string; body: string; threadId: string; threadTitle: string; groupName: string };
+            const m = item as unknown as { id: string; body: string; threadId: string; threadTitle: string; groupName: string };
             return (
               <Pressable
                 onPress={() => router.push({ pathname: "/(app)/thread/[threadId]", params: { threadId: m.threadId, title: m.threadTitle } })}

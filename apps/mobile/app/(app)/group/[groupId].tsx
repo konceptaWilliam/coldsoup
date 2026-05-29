@@ -4,6 +4,7 @@ import { router, useLocalSearchParams, useNavigation } from "expo-router";
 import BottomSheet, { BottomSheetView } from "@gorhom/bottom-sheet";
 import { trpc } from "@/lib/trpc";
 import { StatusBadge } from "@/components/StatusBadge";
+import { useUnread } from "@/lib/unread";
 import type { ThreadStatus } from "@coldsoup/core";
 
 function formatRelative(dateStr: string) {
@@ -23,7 +24,7 @@ type Thread = {
   title: string;
   status: ThreadStatus;
   updated_at: string;
-  messages?: { body: string; is_deleted: boolean }[];
+  messages?: { body: string; is_deleted: boolean; created_at?: string }[];
 };
 
 function sortThreads(threads: Thread[]): Thread[] {
@@ -38,6 +39,7 @@ function sortThreads(threads: Thread[]): Thread[] {
 export default function GroupScreen() {
   const { groupId, name } = useLocalSearchParams<{ groupId: string; name: string }>();
   const navigation = useNavigation();
+  const { isUnread } = useUnread();
   const { data: threads, isLoading, refetch, isRefetching } = trpc.threads.list.useQuery({ groupId });
   const createThread = trpc.threads.create.useMutation({
     onSuccess: () => {
@@ -93,11 +95,13 @@ export default function GroupScreen() {
           const preview = lastMsg && !lastMsg.is_deleted ? lastMsg.body : "";
           const isDone = item.status === "DONE";
           const isUrgent = item.status === "URGENT";
+          const activityTs = lastMsg?.created_at ? new Date(lastMsg.created_at).getTime() : 0;
+          const unread = activityTs > 0 && isUnread(item.id, activityTs);
           return (
             <Pressable
               onPress={() => router.push({
                 pathname: "/(app)/thread/[threadId]",
-                params: { threadId: item.id, title: item.title },
+                params: { threadId: item.id, title: item.title, status: item.status, groupId },
               })}
               style={({ pressed }) => ({
                 opacity: pressed ? 0.6 : isDone ? 0.4 : 1,
@@ -111,10 +115,13 @@ export default function GroupScreen() {
               })}
             >
               <View style={{ flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 4 }}>
-                <Text style={{ fontFamily: "monospace", fontSize: 13, fontWeight: "500", color: "#1A1A18", flex: 1, marginRight: 8 }} numberOfLines={1}>
-                  {item.title.toLowerCase()}
-                </Text>
-                <Text style={{ fontSize: 11, color: "#6B6A65" }}>{formatRelative(item.updated_at)}</Text>
+                <View style={{ flexDirection: "row", alignItems: "center", flex: 1, marginRight: 8 }}>
+                  {unread && <View style={{ width: 6, height: 6, backgroundColor: "#C79B6A", marginRight: 6 }} />}
+                  <Text style={{ fontFamily: "monospace", fontSize: 13, fontWeight: unread ? "700" : "500", color: "#1A1A18", flex: 1 }} numberOfLines={1}>
+                    {item.title.toLowerCase()}
+                  </Text>
+                </View>
+                <Text style={{ fontSize: 11, color: unread ? "#1A1A18" : "#6B6A65" }}>{formatRelative(item.updated_at)}</Text>
               </View>
               <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
                 <Text style={{ fontSize: 12, color: "#6B6A65", flex: 1, marginRight: 8 }} numberOfLines={1}>

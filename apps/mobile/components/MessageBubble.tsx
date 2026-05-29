@@ -1,4 +1,8 @@
-import { View, Text } from "react-native";
+import type { ReactNode } from "react";
+import { View, Text, Pressable } from "react-native";
+import { Avatar } from "./Avatar";
+import { AttachmentGrid } from "./AttachmentGrid";
+import type { MessageAttachment, ReactionType } from "@coldsoup/core";
 
 interface Reaction { type: string; count: number; userReacted: boolean; }
 interface ReplyTo { id: string; body: string; author_name: string; }
@@ -8,42 +12,48 @@ interface Props {
     id: string; body: string; created_at: string;
     edited_at?: string | null; is_deleted?: boolean;
     reactions?: Reaction[]; reply_to?: ReplyTo | null;
+    attachments?: MessageAttachment[];
   };
   displayName: string;
   avatarUrl: string | null;
-}
-
-// Deterministic warm hue from name — mirrors the web app's avatar color logic
-const AVATAR_PALETTE = [
-  "#D4C5A9", "#C9B99A", "#BFB48A", "#D9C4A8", "#C4B49A",
-  "#B8A88A", "#CDB99A", "#D2BFA0", "#C8B598", "#BDB090",
-  "#D6C8A8", "#CAB99C", "#C0B08A", "#D4C2A0", "#CBB898",
-];
-
-function avatarColor(name: string): string {
-  let hash = 0;
-  for (let i = 0; i < name.length; i++) {
-    hash = (hash * 31 + name.charCodeAt(i)) & 0xffffffff;
-  }
-  return AVATAR_PALETTE[Math.abs(hash) % AVATAR_PALETTE.length];
-}
-
-function initials(name: string) {
-  return name.split(" ").map((w) => w[0]).join("").toUpperCase().slice(0, 2);
+  mentionNames?: string[];
+  onLongPress?: () => void;
+  onReactionPress?: (type: ReactionType) => void;
 }
 
 function formatTime(dateStr: string) {
   return new Date(dateStr).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-export function MessageBubble({ message, displayName }: Props) {
+// Highlight @DisplayName tokens (longest names first to avoid partial matches).
+function renderBody(body: string, names: string[]) {
+  if (!names.length || !body) return body;
+  const escaped = [...names].sort((a, b) => b.length - a.length).map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const regex = new RegExp(`@(${escaped.join("|")})`, "g");
+  const parts: ReactNode[] = [];
+  let last = 0;
+  let key = 0;
+  let m: RegExpExecArray | null;
+  while ((m = regex.exec(body)) !== null) {
+    if (m.index > last) parts.push(body.slice(last, m.index));
+    parts.push(
+      <Text key={key++} style={{ fontWeight: "600", color: "#1A1A18", backgroundColor: "#ECE8DF" }}>@{m[1]}</Text>
+    );
+    last = m.index + m[0].length;
+  }
+  if (last < body.length) parts.push(body.slice(last));
+  return parts.length ? parts : body;
+}
+
+export function MessageBubble({ message, displayName, avatarUrl, mentionNames, onLongPress, onReactionPress }: Props) {
   const isDeleted = message.is_deleted;
-  const bg = avatarColor(displayName);
   return (
-    <View style={{ paddingHorizontal: 16, paddingVertical: 10, flexDirection: "row", alignItems: "flex-start", gap: 10 }}>
-      <View style={{ width: 28, height: 28, backgroundColor: bg, alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-        <Text style={{ fontSize: 9, color: "#1A1A18", fontWeight: "600", fontFamily: "monospace" }}>{initials(displayName)}</Text>
-      </View>
+    <Pressable
+      onLongPress={onLongPress}
+      delayLongPress={250}
+      style={({ pressed }) => ({ paddingHorizontal: 16, paddingVertical: 10, flexDirection: "row", alignItems: "flex-start", gap: 10, backgroundColor: pressed && onLongPress ? "#ECE8DF" : "#F2EFE8" })}
+    >
+      <Avatar name={displayName} avatarUrl={avatarUrl} size={28} fontSize={9} />
       <View style={{ flex: 1 }}>
         <View style={{ flexDirection: "row", alignItems: "baseline", gap: 8, marginBottom: 3 }}>
           <Text style={{ fontSize: 13, fontWeight: "600", color: "#1A1A18" }}>{displayName}</Text>
@@ -56,23 +66,37 @@ export function MessageBubble({ message, displayName }: Props) {
             <Text style={{ fontSize: 11, color: "#6B6A65" }} numberOfLines={1}>{message.reply_to.body}</Text>
           </View>
         )}
-        <Text
-          style={{ fontSize: 14, color: isDeleted ? "#9A988F" : "#1A1A18", fontStyle: isDeleted ? "italic" : "normal", lineHeight: 20 }}
-          selectable
-        >
-          {isDeleted ? "This message was deleted." : message.body}
-        </Text>
+        {(isDeleted || message.body.length > 0) && (
+          <Text
+            style={{ fontSize: 14, color: isDeleted ? "#9A988F" : "#1A1A18", fontStyle: isDeleted ? "italic" : "normal", lineHeight: 20 }}
+            selectable
+          >
+            {isDeleted ? "This message was deleted." : (mentionNames && mentionNames.length ? renderBody(message.body, mentionNames) : message.body)}
+          </Text>
+        )}
+        {!isDeleted && message.attachments && message.attachments.length > 0 && (
+          <AttachmentGrid attachments={message.attachments} />
+        )}
         {!isDeleted && message.reactions && message.reactions.some((r) => r.count > 0) && (
           <View style={{ flexDirection: "row", gap: 6, marginTop: 6 }}>
             {message.reactions.filter((r) => r.count > 0).map((r) => (
-              <View key={r.type} style={{ flexDirection: "row", alignItems: "center", gap: 3, paddingHorizontal: 6, paddingVertical: 2, borderWidth: 1, borderColor: "#E2DDD2", backgroundColor: "#F7F4ED" }}>
+              <Pressable
+                key={r.type}
+                onPress={() => onReactionPress?.(r.type as ReactionType)}
+                style={({ pressed }) => ({
+                  flexDirection: "row", alignItems: "center", gap: 3, paddingHorizontal: 6, paddingVertical: 2,
+                  borderWidth: 1, borderColor: r.userReacted ? "#C79B6A" : "#E2DDD2",
+                  backgroundColor: r.userReacted ? "#F6E6D4" : "#F7F4ED",
+                  opacity: pressed ? 0.6 : 1,
+                })}
+              >
                 <Text style={{ fontSize: 12 }}>{r.type}</Text>
                 <Text style={{ fontSize: 11, color: "#6B6A65" }}>{r.count}</Text>
-              </View>
+              </Pressable>
             ))}
           </View>
         )}
       </View>
-    </View>
+    </Pressable>
   );
 }

@@ -884,6 +884,10 @@ function StatusControl({
     null,
   );
   const [confirmReopen, setConfirmReopen] = useState<ThreadStatus | null>(null);
+  // Ignore status clicks briefly after confirming — clicking "yes" swaps the
+  // confirm bar back to the segmented control under the cursor, and the same
+  // click would otherwise fall through and re-open the confirm.
+  const clickLockUntil = useRef(0);
   const displayStatus = optimisticStatus ?? currentStatus;
 
   useEffect(() => {
@@ -906,6 +910,7 @@ function StatusControl({
   const statuses: ThreadStatus[] = ["OPEN", "URGENT", "DONE"];
 
   function handleClick(s: ThreadStatus) {
+    if (Date.now() < clickLockUntil.current) return;
     if (s === displayStatus) return;
     if (displayStatus === "DONE") {
       setConfirmReopen(s);
@@ -916,6 +921,7 @@ function StatusControl({
   }
 
   function confirmReopenTo(s: ThreadStatus) {
+    clickLockUntil.current = Date.now() + 400;
     setConfirmReopen(null);
     setOptimisticStatus(s);
     updateStatus.mutate({ threadId, status: s });

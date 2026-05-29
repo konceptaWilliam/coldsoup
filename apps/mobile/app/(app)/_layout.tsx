@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { router, Stack } from "expo-router";
 import { supabase } from "@/lib/supabase";
+import { UnreadProvider } from "@/lib/unread";
 
 export default function AppLayout() {
   const [checked, setChecked] = useState(false);
@@ -25,10 +26,12 @@ export default function AppLayout() {
   };
 
   return (
-    <Stack screenOptions={{ headerShown: false }}>
-      <Stack.Screen name="(tabs)" />
-      <Stack.Screen name="group/[groupId]" options={{ headerShown: true, title: "", ...headerBase }} />
-      <Stack.Screen name="thread/[threadId]" options={{ headerShown: true, title: "", ...headerBase }} />
-    </Stack>
+    <UnreadProvider>
+      <Stack screenOptions={{ headerShown: false }}>
+        <Stack.Screen name="(tabs)" />
+        <Stack.Screen name="group/[groupId]" options={{ headerShown: true, title: "", ...headerBase }} />
+        <Stack.Screen name="thread/[threadId]" options={{ headerShown: true, title: "", ...headerBase }} />
+      </Stack>
+    </UnreadProvider>
   );
 }

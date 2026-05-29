@@ -1,9 +1,25 @@
 import { View, Text, FlatList, Pressable, RefreshControl, ActivityIndicator } from "react-native";
 import { router } from "expo-router";
 import { trpc } from "@/lib/trpc";
+import { useUnread } from "@/lib/unread";
 
 export default function GroupsTab() {
+  const { isUnread } = useUnread();
   const { data: groups, isLoading, refetch, isRefetching } = trpc.groups.list.useQuery();
+
+  // One query per group to detect unread threads (groups are few).
+  const threadQueries = trpc.useQueries((t) =>
+    (groups ?? []).map((g) => t.threads.list({ groupId: g.id }))
+  );
+  const unreadByGroup: Record<string, boolean> = {};
+  (groups ?? []).forEach((g, i) => {
+    const threads = threadQueries[i]?.data ?? [];
+    unreadByGroup[g.id] = threads.some((th) => {
+      const lastMsg = (th.messages as { created_at?: string }[] | undefined)?.[0];
+      const ts = lastMsg?.created_at ? new Date(lastMsg.created_at).getTime() : 0;
+      return ts > 0 && isUnread(th.id, ts);
+    });
+  });
 
   if (isLoading) {
     return (
@@ -47,7 +63,8 @@ export default function GroupsTab() {
               backgroundColor: "#F2EFE8",
             })}
           >
-            <Text style={{ fontFamily: "monospace", fontSize: 14, color: "#1A1A18", fontWeight: "500" }}>
+            {unreadByGroup[item.id] && <View style={{ width: 6, height: 6, backgroundColor: "#C79B6A", marginRight: 8 }} />}
+            <Text style={{ fontFamily: "monospace", fontSize: 14, color: "#1A1A18", fontWeight: unreadByGroup[item.id] ? "700" : "500" }}>
               {item.name.toLowerCase()}
             </Text>
           </Pressable>
