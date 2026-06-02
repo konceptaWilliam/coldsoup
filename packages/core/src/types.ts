@@ -39,7 +39,7 @@ export interface Message {
 
 export interface MessageAttachment {
   url: string;
-  type: "image" | "audio";
+  type: "image" | "audio" | "video" | "file";
   name: string;
 }
 

@@ -6,6 +6,8 @@ import { createAdminClient } from "@/lib/supabase/admin";
 const ALLOWED_EXTENSIONS = new Set([
   "jpg", "jpeg", "png", "gif", "webp",
   "mp3", "wav", "ogg", "m4a", "aac", "flac",
+  "mp4", "mov", "m4v", "webm",
+  "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "csv", "zip",
 ]);
 
 // Matches: /storage/v1/object/public/attachments/<uuid>/<filename>.<ext>
@@ -171,7 +173,7 @@ export const messagesRouter = router({
             .array(
               z.object({
                 url: z.string().url(),
-                type: z.enum(["image", "audio"]),
+                type: z.enum(["image", "audio", "video", "file"]),
                 name: z.string(),
               })
             )
@@ -246,18 +248,31 @@ export const messagesRouter = router({
         }
       }
 
-      // Send push notifications to other group members
+      // Send push notifications to other group members, skipping anyone who has
+      // paused notifications or muted this thread or its group.
       const senderName = (data?.profiles as unknown as { display_name: string } | null)?.display_name ?? "Someone";
       if (thread) {
         const { data: members } = await admin
           .from("group_memberships")
-          .select("profiles(push_token)")
+          .select("user_id, profiles(push_token, notifications_paused)")
           .eq("group_id", thread.group_id)
           .neq("user_id", profile.id);
 
+        const memberIds = (members ?? []).map((m) => m.user_id as string);
+        const { data: muteRows } = memberIds.length > 0
+          ? await admin
+              .from("mutes")
+              .select("user_id")
+              .in("user_id", memberIds)
+              .in("target_id", [input.threadId, thread.group_id])
+          : { data: [] as { user_id: string }[] };
+        const mutedUserIds = new Set((muteRows ?? []).map((m) => m.user_id as string));
+
         const tokens = (members ?? [])
-          .map((m) => (m.profiles as unknown as { push_token: string | null } | null)?.push_token)
-          .filter((t): t is string => Boolean(t));
+          .filter((m) => !mutedUserIds.has(m.user_id as string))
+          .map((m) => m.profiles as unknown as { push_token: string | null; notifications_paused: boolean } | null)
+          .filter((p): p is { push_token: string; notifications_paused: boolean } => Boolean(p?.push_token) && !p?.notifications_paused)
+          .map((p) => p.push_token);
 
         if (tokens.length > 0) {
           const pushMessages = tokens.map((token) => ({

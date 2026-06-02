@@ -1,6 +1,8 @@
 import { useRef, useState } from "react";
 import { View, Text, Pressable } from "react-native";
+import { useTranslation } from "react-i18next";
 import type { ThreadStatus } from "@coldsoup/core";
+import { useTheme, type Palette } from "@/lib/theme";
 
 const options: { status: ThreadStatus; label: string }[] = [
   { status: "OPEN", label: "OPEN" },
@@ -8,11 +10,13 @@ const options: { status: ThreadStatus; label: string }[] = [
   { status: "DONE", label: "DONE" },
 ];
 
-const activeStyles: Record<ThreadStatus, { bg: string; text: string; border: string }> = {
-  OPEN:   { bg: "#EAF5EF", text: "#2F5A43", border: "#8FBFA3" },
-  URGENT: { bg: "#F6E6D4", text: "#8A4B1F", border: "#C79B6A" },
-  DONE:   { bg: "#ECEBE4", text: "#5A5954", border: "#C7C5BC" },
-};
+function activeStyle(c: Palette, status: ThreadStatus): { bg: string; text: string; border: string } {
+  switch (status) {
+    case "OPEN": return { bg: c.openBg, text: c.openText, border: c.openBorder };
+    case "URGENT": return { bg: c.urgentBg, text: c.urgentText, border: c.urgentBorder };
+    case "DONE": return { bg: c.doneBg, text: c.doneText, border: c.doneBorder };
+  }
+}
 
 interface Props {
   status: ThreadStatus;
@@ -20,6 +24,8 @@ interface Props {
 }
 
 export function StatusControl({ status, onChange }: Props) {
+  const { c } = useTheme();
+  const { t } = useTranslation();
   const [confirm, setConfirm] = useState<ThreadStatus | null>(null);
   // Ignore taps briefly after confirming — clicking "yes" swaps the confirm row
   // back to the segmented control under the finger and the same tap would
@@ -47,35 +53,38 @@ export function StatusControl({ status, onChange }: Props) {
 
   if (confirm) {
     return (
-      <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 10, gap: 8, borderBottomWidth: 1, borderBottomColor: "#E2DDD2", backgroundColor: "#F2EFE8" }}>
-        <Text style={{ flex: 1, fontFamily: "monospace", fontSize: 11, color: "#6B6A65", letterSpacing: 1, textTransform: "uppercase" }}>
-          Reopen thread?
+      <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 10, gap: 8, borderBottomWidth: 1, borderBottomColor: c.border, backgroundColor: c.surface }}>
+        <Text style={{ flex: 1, fontFamily: "monospace", fontSize: 11, color: c.muted, letterSpacing: 1, textTransform: "uppercase" }}>
+          {t("status.reopenConfirm")}
         </Text>
         <Pressable
           onPress={confirmReopen}
-          style={({ pressed }) => ({ minHeight: 36, paddingHorizontal: 14, justifyContent: "center", borderWidth: 1, borderColor: "#E2DDD2", backgroundColor: "#F7F4ED", opacity: pressed ? 0.6 : 1 })}
+          style={({ pressed }) => ({ minHeight: 36, paddingHorizontal: 14, justifyContent: "center", borderWidth: 1, borderColor: c.border, backgroundColor: c.surface2, opacity: pressed ? 0.6 : 1 })}
         >
-          <Text style={{ fontFamily: "monospace", fontSize: 11, color: "#1A1A18", letterSpacing: 1, textTransform: "uppercase" }}>Yes</Text>
+          <Text style={{ fontFamily: "monospace", fontSize: 11, color: c.ink, letterSpacing: 1, textTransform: "uppercase" }}>{t("common.yes")}</Text>
         </Pressable>
         <Pressable
           onPress={() => setConfirm(null)}
           style={({ pressed }) => ({ minHeight: 36, paddingHorizontal: 14, justifyContent: "center", opacity: pressed ? 0.6 : 1 })}
         >
-          <Text style={{ fontFamily: "monospace", fontSize: 11, color: "#6B6A65", letterSpacing: 1, textTransform: "uppercase" }}>Cancel</Text>
+          <Text style={{ fontFamily: "monospace", fontSize: 11, color: c.muted, letterSpacing: 1, textTransform: "uppercase" }}>{t("common.cancel")}</Text>
         </Pressable>
       </View>
     );
   }
 
   return (
-    <View style={{ flexDirection: "row", paddingHorizontal: 16, paddingVertical: 10, gap: 6, borderBottomWidth: 1, borderBottomColor: "#E2DDD2", backgroundColor: "#F2EFE8" }}>
+    <View style={{ flexDirection: "row", paddingHorizontal: 16, paddingVertical: 10, gap: 6, borderBottomWidth: 1, borderBottomColor: c.border, backgroundColor: c.surface }}>
       {options.map((opt) => {
         const active = status === opt.status;
-        const s = active ? activeStyles[opt.status] : null;
+        const s = active ? activeStyle(c, opt.status) : null;
         return (
           <Pressable
             key={opt.status}
             onPress={() => handlePress(opt.status)}
+            accessibilityRole="button"
+            accessibilityState={{ selected: active }}
+            accessibilityLabel={t("a11y.setStatus", { status: opt.label })}
             style={{
               flex: 1,
               minHeight: 44,
@@ -83,11 +92,11 @@ export function StatusControl({ status, onChange }: Props) {
               alignItems: "center",
               borderRadius: 0,
               borderWidth: 1,
-              borderColor: s?.border ?? "#E2DDD2",
-              backgroundColor: s?.bg ?? "#F7F4ED",
+              borderColor: s?.border ?? c.border,
+              backgroundColor: s?.bg ?? c.surface2,
             }}
           >
-            <Text style={{ fontSize: 10, fontWeight: "600", color: s?.text ?? "#6B6A65", letterSpacing: 1.2, fontFamily: "monospace" }}>
+            <Text style={{ fontSize: 10, fontWeight: "600", color: s?.text ?? c.muted, letterSpacing: 1.2, fontFamily: "monospace" }}>
               {opt.label}
             </Text>
           </Pressable>

@@ -5,12 +5,57 @@
 :root {
   --background: #F2EFE8;
   --foreground: #1A1A18;
+  --surface: #F2EFE8;
+  --surface-2: #F7F4ED;
+  --ink: #1A1A18;
+  --ink-soft: #2A2A27;
+  --border: #E2DDD2;
+  --border-strong: #D0C9BB;
+  --muted: #6B6A65;
+  --muted-2: #9A988F;
+  --accent: #D97706;
+  --accent-light: #FEF3C7;
+  --urgent-ink: #8A4B1F;
+  --urgent-tint: #F6E6D4;
+  --urgent-border: #C79B6A;
+  --done-ink: #5A5954;
+  --done-tint: #ECEBE4;
+  --done-border: #C7C5BC;
+  --online: #2F8F5B;
+  --background: var(--surface);
+  --foreground: var(--ink);
 
   /* pastel accent — mint (default) */
   --pastel: #C8E6D5;
   --pastel-ink: #2F5A43;
   --pastel-tint: #EAF5EF;
   --pastel-deep: #8FBFA3;
+}
+
+html[data-theme="dark"] {
+  --surface: #1A1A18;
+  --surface-2: #232320;
+  --ink: #F2EFE8;
+  --ink-soft: #E2DDD2;
+  --border: #33322E;
+  --border-strong: #44423C;
+  --muted: #9A988F;
+  --muted-2: #6B6A65;
+  --accent: #E8923B;
+  --accent-light: #2E2519;
+  --urgent-ink: #D99A5E;
+  --urgent-tint: #2E2519;
+  --urgent-border: #6A5230;
+  --done-ink: #8A887F;
+  --done-tint: #232320;
+  --done-border: #3A3A35;
+  --background: var(--surface);
+  --foreground: var(--ink);
+  --pastel: #1C2B23;
+  --pastel-ink: #7FB89A;
+  --pastel-tint: #1C2B23;
+  --pastel-deep: #3A5A48;
+  --online: #4FB87F;
 }
 
 * {
@@ -51,11 +96,11 @@ body,
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #E2DDD2;
+  background: var(--border);
   border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #D0C9BB;
+  background: var(--border-strong);
 }
 
 /* Motion primitives */

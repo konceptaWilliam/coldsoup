@@ -69,7 +69,7 @@ function OnboardingForm() {
               value={displayName}
               onChange={(e) => setDisplayName(e.target.value)}
               placeholder="Your name"
-              maxLength={60}
+              maxLength={20}
               className="w-full border border-border bg-surface-2 px-3 py-2.5 text-sm text-ink placeholder:text-muted focus:outline-none focus:border-ink transition-colors"
             />
           </div>

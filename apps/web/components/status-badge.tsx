@@ -9,13 +9,13 @@ const config: Record<Status, { label: string; className: string; dot?: boolean }
   URGENT: {
     label: "urgent",
     className:
-      "bg-urgent-tint text-urgent-ink border border-[#C79B6A]",
+      "bg-urgent-tint text-urgent-ink border border-urgent-border",
     dot: true,
   },
   DONE: {
     label: "done",
     className:
-      "bg-done-tint text-done-ink border border-[#C7C5BC]",
+      "bg-done-tint text-done-ink border border-done-border",
   },
 };
 

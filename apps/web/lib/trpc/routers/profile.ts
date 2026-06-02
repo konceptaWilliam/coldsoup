@@ -25,7 +25,7 @@ export const profileRouter = router({
   update: protectedProcedure
     .input(
       z.object({
-        displayName: z.string().min(1).max(60).optional(),
+        displayName: z.string().min(1).max(20).optional(),
         avatarUrl: z.string().url().nullable().optional(),
       })
     )
@@ -50,6 +50,20 @@ export const profileRouter = router({
 
       return data;
     }),
+
+  deleteAccount: protectedProcedure.mutation(async ({ ctx }) => {
+    const { profile } = ctx;
+    const admin = createAdminClient();
+
+    // Deleting the auth user cascades to the profile (FK on delete cascade),
+    // and from there to memberships / reads / mutes. Messages keep their rows
+    // with user_id set to null (on delete set null) so thread history stays.
+    const { error } = await admin.auth.admin.deleteUser(profile.id);
+    if (error) {
+      throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: error.message });
+    }
+    return { success: true };
+  }),
 
   savePushToken: protectedProcedure
     .input(z.object({ token: z.string().min(1).max(500) }))

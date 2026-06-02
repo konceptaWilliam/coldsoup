@@ -1,12 +1,15 @@
 import { useEffect, useRef } from "react";
 import { View, Text, Animated } from "react-native";
 import type { ThreadStatus } from "@coldsoup/core";
+import { useTheme, type Palette } from "@/lib/theme";
 
-const styles: Record<ThreadStatus, { bg: string; text: string; border: string; label: string; dot?: boolean }> = {
-  OPEN:   { bg: "#EAF5EF", text: "#2F5A43", border: "#8FBFA3", label: "open" },
-  URGENT: { bg: "#F6E6D4", text: "#8A4B1F", border: "#C79B6A", label: "urgent", dot: true },
-  DONE:   { bg: "#ECEBE4", text: "#5A5954", border: "#C7C5BC", label: "done" },
-};
+function statusStyle(c: Palette, status: ThreadStatus): { bg: string; text: string; border: string; label: string; dot?: boolean } {
+  switch (status) {
+    case "OPEN": return { bg: c.openBg, text: c.openText, border: c.openBorder, label: "open" };
+    case "URGENT": return { bg: c.urgentBg, text: c.urgentText, border: c.urgentBorder, label: "urgent", dot: true };
+    case "DONE": return { bg: c.doneBg, text: c.doneText, border: c.doneBorder, label: "done" };
+  }
+}
 
 function PulseDot({ color }: { color: string }) {
   const scale = useRef(new Animated.Value(1)).current;
@@ -26,7 +29,8 @@ function PulseDot({ color }: { color: string }) {
 }
 
 export function StatusBadge({ status }: { status: ThreadStatus }) {
-  const s = styles[status];
+  const { c } = useTheme();
+  const s = statusStyle(c, status);
   return (
     <View
       style={{

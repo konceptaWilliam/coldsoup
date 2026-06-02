@@ -1,30 +1,51 @@
-export const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20 MB
+export const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25 MB — images, audio, docs
+export const MAX_VIDEO_SIZE = 100 * 1024 * 1024; // 100 MB — video
+
+const IMAGE_LIST = ["jpg", "jpeg", "png", "gif", "webp"];
+const AUDIO_LIST = ["mp3", "wav", "ogg", "m4a", "aac", "flac"];
+const VIDEO_LIST = ["mp4", "mov", "m4v", "webm"];
+const FILE_LIST = ["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "csv", "zip"];
+
+export const IMAGE_EXT = new Set(IMAGE_LIST);
+export const AUDIO_EXT = new Set(AUDIO_LIST);
+export const VIDEO_EXT = new Set(VIDEO_LIST);
+export const FILE_EXT = new Set(FILE_LIST);
 
 export const ALLOWED_MIME_TYPES = new Set([
-  "image/jpeg",
-  "image/png",
-  "image/gif",
-  "image/webp",
-  "audio/mpeg",
-  "audio/mp3",
-  "audio/wav",
-  "audio/ogg",
-  "audio/m4a",
-  "audio/aac",
-  "audio/flac",
-  "audio/x-m4a",
+  "image/jpeg", "image/png", "image/gif", "image/webp",
+  "audio/mpeg", "audio/mp3", "audio/wav", "audio/ogg", "audio/m4a", "audio/aac", "audio/flac", "audio/x-m4a",
+  "video/mp4", "video/quicktime", "video/x-m4v", "video/webm",
+  "application/pdf", "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.ms-powerpoint",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  "text/plain", "text/csv", "application/zip",
 ]);
 
-export const ALLOWED_EXTENSIONS = new Set([
-  "jpg", "jpeg", "png", "gif", "webp",
-  "mp3", "wav", "ogg", "m4a", "aac", "flac",
-]);
+export const ALLOWED_EXTENSIONS = new Set(
+  IMAGE_LIST.concat(AUDIO_LIST, VIDEO_LIST, FILE_LIST),
+);
+
+export type AttachmentType = "image" | "audio" | "video" | "file";
+
+export function attachmentTypeFor(file: { name: string; type: string }): AttachmentType {
+  const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+  if (file.type.startsWith("image/") || IMAGE_EXT.has(ext)) return "image";
+  if (file.type.startsWith("video/") || VIDEO_EXT.has(ext)) return "video";
+  if (file.type.startsWith("audio/") || AUDIO_EXT.has(ext)) return "audio";
+  return "file";
+}
 
 export type FileValidationError = { file: string; reason: string };
 
 export function validateFile(file: File): FileValidationError | null {
-  if (file.size > MAX_FILE_SIZE) {
-    return { file: file.name, reason: `exceeds 20 MB limit (${(file.size / 1024 / 1024).toFixed(1)} MB)` };
+  const isVideo = attachmentTypeFor(file) === "video";
+  const limit = isVideo ? MAX_VIDEO_SIZE : MAX_FILE_SIZE;
+  if (file.size > limit) {
+    const mb = isVideo ? "100" : "25";
+    return { file: file.name, reason: `exceeds ${mb} MB limit (${(file.size / 1024 / 1024).toFixed(1)} MB)` };
   }
   const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
   if (!ALLOWED_EXTENSIONS.has(ext) && !ALLOWED_MIME_TYPES.has(file.type)) {

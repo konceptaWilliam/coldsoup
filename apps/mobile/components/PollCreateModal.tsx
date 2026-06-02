@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Modal, View, Text, TextInput, Pressable, ScrollView, KeyboardAvoidingView, Platform, Animated, StyleSheet } from "react-native";
+import { useTranslation } from "react-i18next";
+import { useTheme } from "@/lib/theme";
 
 interface Props {
   visible: boolean;
@@ -9,6 +11,8 @@ interface Props {
 }
 
 export function PollCreateModal({ visible, isPending, onSubmit, onClose }: Props) {
+  const { c } = useTheme();
+  const { t } = useTranslation();
   const [question, setQuestion] = useState("");
   const [options, setOptions] = useState<string[]>([""]);
 
@@ -51,64 +55,64 @@ export function PollCreateModal({ visible, isPending, onSubmit, onClose }: Props
         behavior={Platform.OS === "ios" ? "padding" : undefined}
         style={{ flex: 1, justifyContent: "flex-end" }}
       >
-        <Animated.View style={{ ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(26,26,24,0.2)", opacity: progress, pointerEvents: "none" }} />
+        <Animated.View style={{ ...StyleSheet.absoluteFillObject, backgroundColor: c.overlay, opacity: progress, pointerEvents: "none" }} />
         <Pressable style={{ flex: 1 }} onPress={handleClose} />
-        <Animated.View style={{ backgroundColor: "#F2EFE8", borderTopWidth: 1, borderColor: "#E2DDD2", maxHeight: "85%", transform: [{ translateY: panelTranslate }] }}>
+        <Animated.View style={{ backgroundColor: c.surface, borderTopWidth: 1, borderColor: c.border, maxHeight: "85%", transform: [{ translateY: panelTranslate }] }}>
           <ScrollView contentContainerStyle={{ padding: 16 }} keyboardShouldPersistTaps="handled">
-            <Text style={{ fontFamily: "monospace", fontSize: 14, fontWeight: "600", color: "#1A1A18", marginBottom: 16 }}>
-              Create poll
+            <Text style={{ fontFamily: "monospace", fontSize: 14, fontWeight: "600", color: c.ink, marginBottom: 16 }}>
+              {t("poll.create")}
             </Text>
 
-            <Text style={{ fontFamily: "monospace", fontSize: 10, fontWeight: "500", color: "#6B6A65", letterSpacing: 1.5, textTransform: "uppercase", marginBottom: 6 }}>
-              Question
+            <Text style={{ fontFamily: "monospace", fontSize: 10, fontWeight: "500", color: c.muted, letterSpacing: 1.5, textTransform: "uppercase", marginBottom: 6 }}>
+              {t("poll.question")}
             </Text>
             <TextInput
-              style={{ borderWidth: 1, borderColor: "#E2DDD2", backgroundColor: "#F7F4ED", paddingHorizontal: 12, paddingVertical: 10, fontSize: 16, color: "#1A1A18", marginBottom: 20 }}
+              style={{ borderWidth: 1, borderColor: c.border, backgroundColor: c.surface2, paddingHorizontal: 12, paddingVertical: 10, fontSize: 16, color: c.ink, marginBottom: 20 }}
               value={question}
               onChangeText={setQuestion}
-              placeholder="What do you want to ask?"
-              placeholderTextColor="#6B6A65"
+              placeholder={t("poll.questionPlaceholder")}
+              placeholderTextColor={c.muted}
               maxLength={500}
               autoFocus
             />
 
-            <Text style={{ fontFamily: "monospace", fontSize: 10, fontWeight: "500", color: "#6B6A65", letterSpacing: 1.5, textTransform: "uppercase", marginBottom: 6 }}>
-              Options <Text style={{ color: "#9A988F", textTransform: "none", letterSpacing: 0 }}>(optional — anyone can add more later)</Text>
+            <Text style={{ fontFamily: "monospace", fontSize: 10, fontWeight: "500", color: c.muted, letterSpacing: 1.5, textTransform: "uppercase", marginBottom: 6 }}>
+              {t("poll.options")} <Text style={{ color: c.muted2, textTransform: "none", letterSpacing: 0 }}>{t("poll.optionsHint")}</Text>
             </Text>
             <View style={{ gap: 8 }}>
               {options.map((opt, i) => (
                 <View key={i} style={{ flexDirection: "row", gap: 6 }}>
                   <TextInput
-                    style={{ flex: 1, borderWidth: 1, borderColor: "#E2DDD2", backgroundColor: "#F7F4ED", paddingHorizontal: 12, paddingVertical: 8, fontSize: 16, color: "#1A1A18" }}
+                    style={{ flex: 1, borderWidth: 1, borderColor: c.border, backgroundColor: c.surface2, paddingHorizontal: 12, paddingVertical: 8, fontSize: 16, color: c.ink }}
                     value={opt}
                     onChangeText={(val) => setOptions((prev) => prev.map((o, idx) => (idx === i ? val : o)))}
-                    placeholder={`Option ${i + 1}`}
-                    placeholderTextColor="#6B6A65"
+                    placeholder={t("poll.optionPlaceholder", { index: i + 1 })}
+                    placeholderTextColor={c.muted}
                     maxLength={200}
                   />
                   {options.length > 1 && (
                     <Pressable onPress={() => setOptions((prev) => prev.filter((_, idx) => idx !== i))} style={{ paddingHorizontal: 8, justifyContent: "center" }}>
-                      <Text style={{ fontFamily: "monospace", fontSize: 16, color: "#6B6A65" }}>×</Text>
+                      <Text style={{ fontFamily: "monospace", fontSize: 16, color: c.muted }}>×</Text>
                     </Pressable>
                   )}
                 </View>
               ))}
             </View>
             <Pressable onPress={() => setOptions((prev) => [...prev, ""])} style={({ pressed }) => ({ marginTop: 8, opacity: pressed ? 0.6 : 1, minHeight: 32, justifyContent: "center" })}>
-              <Text style={{ fontFamily: "monospace", fontSize: 11, color: "#6B6A65" }}>+ add option</Text>
+              <Text style={{ fontFamily: "monospace", fontSize: 11, color: c.muted }}>{t("poll.addOption")}</Text>
             </Pressable>
 
             <View style={{ flexDirection: "row", justifyContent: "flex-end", gap: 8, marginTop: 24 }}>
               <Pressable onPress={handleClose} style={({ pressed }) => ({ paddingHorizontal: 16, paddingVertical: 12, opacity: pressed ? 0.6 : 1 })}>
-                <Text style={{ fontFamily: "monospace", fontSize: 13, color: "#6B6A65" }}>Cancel</Text>
+                <Text style={{ fontFamily: "monospace", fontSize: 13, color: c.muted }}>{t("common.cancel")}</Text>
               </Pressable>
               <Pressable
                 onPress={handleSubmit}
                 disabled={!question.trim() || isPending}
-                style={({ pressed }) => ({ backgroundColor: "#1A1A18", paddingHorizontal: 16, paddingVertical: 12, opacity: pressed || !question.trim() || isPending ? 0.4 : 1 })}
+                style={({ pressed }) => ({ backgroundColor: c.ink, paddingHorizontal: 16, paddingVertical: 12, opacity: pressed || !question.trim() || isPending ? 0.4 : 1 })}
               >
-                <Text style={{ fontFamily: "monospace", fontSize: 13, fontWeight: "500", color: "#F2EFE8" }}>
-                  {isPending ? "Sending…" : "Send poll"}
+                <Text style={{ fontFamily: "monospace", fontSize: 13, fontWeight: "500", color: c.surface }}>
+                  {isPending ? t("poll.sending") : t("poll.sendPoll")}
                 </Text>
               </Pressable>
             </View>

@@ -12,6 +12,7 @@ export function NewThreadDialog({
   onClose: () => void;
 }) {
   const [title, setTitle] = useState("");
+  const [dueDate, setDueDate] = useState<string | null>(null);
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
   const utils = trpc.useUtils();
@@ -31,7 +32,7 @@ export function NewThreadDialog({
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!title.trim()) return;
-    createThread.mutate({ groupId, title: title.trim() });
+    createThread.mutate({ groupId, title: title.trim(), dueDate });
   }
 
   return (
@@ -63,6 +64,33 @@ export function NewThreadDialog({
               maxLength={200}
               className="w-full border border-border bg-surface-2 px-3 py-2.5 text-sm text-ink placeholder:text-muted focus:outline-none focus:border-ink transition-colors"
             />
+          </div>
+
+          <div>
+            <label
+              htmlFor="thread-due-date"
+              className="block font-mono text-xs text-muted uppercase tracking-wider mb-2"
+            >
+              Due date
+            </label>
+            <div className="flex items-center gap-2">
+              <input
+                id="thread-due-date"
+                type="date"
+                value={dueDate ?? ""}
+                onChange={(e) => setDueDate(e.target.value || null)}
+                className="flex-1 border border-border bg-surface-2 px-3 py-2.5 text-sm text-ink focus:outline-none focus:border-ink transition-colors"
+              />
+              {dueDate && (
+                <button
+                  type="button"
+                  onClick={() => setDueDate(null)}
+                  className="font-mono text-xs text-muted hover:text-ink px-2 py-2"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
           </div>
 
           {createThread.error && (

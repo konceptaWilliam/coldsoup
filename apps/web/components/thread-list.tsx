@@ -16,6 +16,12 @@ type Thread = {
   status: "OPEN" | "URGENT" | "DONE";
   updated_at: string;
   group_id: string;
+  due_date?: string | null;
+  creator?: {
+    id: string;
+    display_name: string;
+    avatar_url: string | null;
+  } | null;
   messages?: Array<{
     body: string;
     is_deleted?: boolean;
@@ -23,6 +29,8 @@ type Thread = {
     profiles: { display_name: string } | null;
   }>;
 };
+
+type ThreadFilter = "ALL" | Thread["status"];
 
 function formatRelative(dateStr: string): string {
   const date = new Date(dateStr);
@@ -45,6 +53,19 @@ function sortThreads(threads: Thread[]): Thread[] {
     const bDone = b.status === "DONE" ? 1 : 0;
     if (aDone !== bDone) return aDone - bDone;
     return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
+  });
+}
+
+function isOverdue(ymd: string): boolean {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return new Date(`${ymd}T00:00:00`).getTime() < today.getTime();
+}
+
+function formatDue(ymd: string): string {
+  return new Date(`${ymd}T00:00:00`).toLocaleDateString("en", {
+    month: "short",
+    day: "numeric",
   });
 }
 
@@ -74,14 +95,39 @@ function MemberAvatar({ member }: { member: { display_name: string; avatar_url: 
   );
 }
 
+function BellOffIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      className={className}
+    >
+      <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+      <path d="M18.63 13A17.9 17.9 0 0 0 18 8" />
+      <path d="M6.26 6.26A6 6 0 0 0 6 8c0 7-3 9-3 9h14" />
+      <path d="M18 8a6 6 0 0 0-9.33-5" />
+      <path d="m1 1 22 22" />
+    </svg>
+  );
+}
+
 function GroupInfoModal({ groupId, groupName, onClose }: { groupId: string; groupName: string; onClose: () => void }) {
   const utils = trpc.useUtils();
   const { data: members = [], isLoading } = trpc.messages.groupMembers.useQuery({ groupId });
   const { data: pendingInvites = [] } = trpc.invites.list.useQuery({ groupId }, { retry: false });
   const { data: profile } = trpc.profile.get.useQuery();
+  const { data: notifPrefs } = trpc.notifications.prefs.useQuery();
 
   const myMembership = members.find((m) => m.id === profile?.id);
   const isAdmin = myMembership?.role === "ADMIN";
+  const isGroupMuted = !!notifPrefs?.groupIds.includes(groupId);
 
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(groupName);
@@ -111,6 +157,25 @@ function GroupInfoModal({ groupId, groupName, onClose }: { groupId: string; grou
 
   const transferAdmin = trpc.groups.transferAdmin.useMutation({
     onSuccess: () => { utils.messages.groupMembers.invalidate({ groupId }); onClose(); },
+  });
+
+  const setMute = trpc.notifications.setMute.useMutation({
+    onMutate: async ({ targetId, muted }) => {
+      await utils.notifications.prefs.cancel();
+      const prev = utils.notifications.prefs.getData();
+      utils.notifications.prefs.setData(undefined, (old) => {
+        if (!old) return old;
+        const set = new Set(old.groupIds);
+        if (muted) set.add(targetId);
+        else set.delete(targetId);
+        return { ...old, groupIds: Array.from(set) };
+      });
+      return { prev };
+    },
+    onError: (_err, _vars, ctx) => {
+      if (ctx?.prev) utils.notifications.prefs.setData(undefined, ctx.prev);
+    },
+    onSettled: () => utils.notifications.prefs.invalidate(),
   });
 
   function copyLink() {
@@ -149,6 +214,17 @@ function GroupInfoModal({ groupId, groupName, onClose }: { groupId: string; grou
 
         {isLoading ? <div className="h-16 bg-border/40 animate-pulse" /> : (
           <div className="space-y-4">
+            <div>
+              <p className="font-mono text-[10px] text-muted uppercase tracking-wider mb-2">Notifications</p>
+              <button
+                onClick={() => setMute.mutate({ targetType: "group", targetId: groupId, muted: !isGroupMuted })}
+                disabled={setMute.isPending}
+                className="w-full border border-border bg-surface-2 px-3 py-2 font-mono text-[12px] text-ink hover:border-border-strong transition-colors disabled:opacity-40"
+              >
+                {isGroupMuted ? "Unmute group" : "Mute group"}
+              </button>
+            </div>
+
             {/* Invite section (admin only) */}
             {isAdmin && (
               <div>
@@ -241,6 +317,7 @@ export function ThreadList({ groupId, groupName }: { groupId: string; groupName:
   const pathname = usePathname();
   const [showNewThread, setShowNewThread] = useState(false);
   const [showGroupInfo, setShowGroupInfo] = useState(false);
+  const [filter, setFilter] = useState<ThreadFilter>("ALL");
   const utils = trpc.useUtils();
   const { threadCounts, setThreadCount } = useUnread();
   const { open: openSidebar } = useMobileSidebar();
@@ -252,9 +329,21 @@ export function ThreadList({ groupId, groupName }: { groupId: string; groupName:
     { groupId },
     { refetchOnWindowFocus: false }
   );
+  const { data: notifPrefs } = trpc.notifications.prefs.useQuery();
 
   const threads = rawThreads as unknown as Thread[];
-  const sorted = useMemo(() => sortThreads(threads), [threads]);
+  const isGroupMuted = !!notifPrefs?.groupIds.includes(groupId);
+  const sorted = useMemo(() => {
+    const all = sortThreads(threads);
+    return filter === "ALL" ? all : all.filter((thread) => thread.status === filter);
+  }, [threads, filter]);
+
+  const filterOptions: Array<{ key: ThreadFilter; label: string }> = [
+    { key: "ALL", label: "All" },
+    { key: "OPEN", label: "Open" },
+    { key: "URGENT", label: "Urgent" },
+    { key: "DONE", label: "Done" },
+  ];
 
   // Calculate and push unread counts whenever thread data changes
   useEffect(() => {
@@ -321,6 +410,7 @@ export function ThreadList({ groupId, groupName }: { groupId: string; groupName:
 
           <button
             onClick={() => setShowGroupInfo(true)}
+            title={isGroupMuted ? "Group muted" : "Group options"}
             className="font-mono text-sm font-semibold text-ink flex-1 truncate min-w-0 text-left hover:text-muted transition-colors"
           >
             <span className="text-muted-2">· </span><span className="lowercase">{groupName}</span>
@@ -342,6 +432,27 @@ export function ThreadList({ groupId, groupName }: { groupId: string; groupName:
         </div>
       </header>
 
+      {/* Filters */}
+      <div className="grid grid-cols-4 gap-1.5 px-3 md:px-[18px] py-2 border-b border-border">
+        {filterOptions.map((opt) => {
+          const active = filter === opt.key;
+          return (
+            <button
+              key={opt.key}
+              onClick={() => setFilter(opt.key)}
+              className={`min-h-8 border font-mono text-[10px] uppercase tracking-[0.12em] transition-colors ${
+                active
+                  ? "bg-ink text-surface border-ink"
+                  : "bg-surface-2 text-muted border-border hover:text-ink hover:border-border-strong"
+              }`}
+              aria-pressed={active}
+            >
+              {opt.label}
+            </button>
+          );
+        })}
+      </div>
+
       {/* Thread items */}
       <div className="flex-1 overflow-y-auto">
         {isLoading ? (
@@ -362,6 +473,8 @@ export function ThreadList({ groupId, groupName }: { groupId: string; groupName:
             const lastMessage = thread.messages?.[thread.messages.length - 1];
             const lastAuthor = lastMessage?.profiles?.display_name?.split(" ")[0];
             const unread = isActive ? 0 : (threadCounts[thread.id] ?? 0);
+            const isThreadMuted = !!notifPrefs?.threadIds.includes(thread.id);
+            const overdue = thread.due_date ? isOverdue(thread.due_date) : false;
 
             const borderLeftColor = isActive ? "var(--pastel-deep)" : "transparent";
 
@@ -391,6 +504,11 @@ export function ThreadList({ groupId, groupName }: { groupId: string; groupName:
                   </span>
                   <div className="flex items-center gap-1.5 flex-shrink-0">
                     {unread > 0 && <UnreadPrism isUrgent={thread.status === "URGENT"} />}
+                    {isThreadMuted && (
+                      <span className="text-muted-2" title="Muted">
+                        <BellOffIcon />
+                      </span>
+                    )}
                     <span className="font-mono text-[10px] text-muted">
                       {formatRelative(thread.updated_at)}
                     </span>
@@ -416,6 +534,30 @@ export function ThreadList({ groupId, groupName }: { groupId: string; groupName:
                         )}
                         <span className="text-xs text-muted truncate">{lastMessage.body}</span>
                       </>
+                    )}
+                  </div>
+                )}
+
+                {(thread.creator || thread.due_date) && (
+                  <div className="flex items-center flex-wrap gap-1.5 mt-2">
+                    {thread.creator && (
+                      <div className="flex items-center gap-1.5 min-w-0 max-w-full">
+                        <MemberAvatar member={thread.creator} />
+                        <span className="font-mono text-[10px] text-muted truncate">
+                          {thread.creator.display_name}
+                        </span>
+                      </div>
+                    )}
+                    {thread.due_date && (
+                      <span
+                        className={`font-mono text-[9px] uppercase tracking-[0.08em] px-1.5 py-0.5 border ${
+                          overdue
+                            ? "border-urgent-border bg-urgent-tint text-urgent-ink"
+                            : "border-border bg-surface-2 text-muted"
+                        }`}
+                      >
+                        {formatDue(thread.due_date)}
+                      </span>
                     )}
                   </div>
                 )}

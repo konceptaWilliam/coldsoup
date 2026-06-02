@@ -7,7 +7,7 @@ export const onboardingRouter = router({
   complete: publicProcedure
     .input(
       z.object({
-        displayName: z.string().min(1).max(60),
+        displayName: z.string().min(1).max(20),
         inviteToken: z.string().optional(),
       })
     )

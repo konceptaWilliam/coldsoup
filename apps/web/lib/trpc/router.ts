@@ -7,6 +7,8 @@ import { onboardingRouter } from "./routers/onboarding";
 import { profileRouter } from "./routers/profile";
 import { searchRouter } from "./routers/search";
 import { pollsRouter } from "./routers/polls";
+import { notificationsRouter } from "./routers/notifications";
+import { linksRouter } from "./routers/links";
 
 export const appRouter = router({
   groups: groupsRouter,
@@ -17,6 +19,8 @@ export const appRouter = router({
   profile: profileRouter,
   search: searchRouter,
   polls: pollsRouter,
+  notifications: notificationsRouter,
+  links: linksRouter,
 });
 
 export type AppRouter = typeof appRouter;

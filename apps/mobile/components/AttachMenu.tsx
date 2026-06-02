@@ -1,16 +1,22 @@
 import { Modal, View, Text, Pressable } from "react-native";
+import { useTranslation } from "react-i18next";
+import { useTheme } from "@/lib/theme";
 
 interface Props {
   visible: boolean;
   onClose: () => void;
   onPhoto: () => void;
+  onFile: () => void;
+  onVoice: () => void;
   onPoll: () => void;
   onCamera?: () => void;
 }
 
 const OPTIONS_BOTTOM = 70; // sits just above the composer row
 
-export function AttachMenu({ visible, onClose, onPhoto, onPoll, onCamera }: Props) {
+export function AttachMenu({ visible, onClose, onPhoto, onFile, onVoice, onPoll, onCamera }: Props) {
+  const { c } = useTheme();
+  const { t } = useTranslation();
   function choose(fn: () => void) {
     onClose();
     fn();
@@ -19,26 +25,38 @@ export function AttachMenu({ visible, onClose, onPhoto, onPoll, onCamera }: Prop
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <Pressable style={{ flex: 1 }} onPress={onClose}>
-        <View style={{ position: "absolute", left: 12, bottom: OPTIONS_BOTTOM, borderWidth: 1, borderColor: "#E2DDD2", backgroundColor: "#F2EFE8", minWidth: 160 }}>
+        <View style={{ position: "absolute", left: 12, bottom: OPTIONS_BOTTOM, borderWidth: 1, borderColor: c.border, backgroundColor: c.surface, minWidth: 160 }}>
           {onCamera && (
             <Pressable
               onPress={() => choose(onCamera)}
-              style={({ pressed }) => ({ paddingHorizontal: 14, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: "#E2DDD2", opacity: pressed ? 0.6 : 1 })}
+              style={({ pressed }) => ({ paddingHorizontal: 14, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: c.border, opacity: pressed ? 0.6 : 1 })}
             >
-              <Text style={{ fontFamily: "monospace", fontSize: 12, color: "#1A1A18", letterSpacing: 0.5 }}>Take Photo</Text>
+              <Text style={{ fontFamily: "monospace", fontSize: 12, color: c.ink, letterSpacing: 0.5 }}>{t("attach.takePhoto")}</Text>
             </Pressable>
           )}
           <Pressable
             onPress={() => choose(onPhoto)}
-            style={({ pressed }) => ({ paddingHorizontal: 14, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: "#E2DDD2", opacity: pressed ? 0.6 : 1 })}
+            style={({ pressed }) => ({ paddingHorizontal: 14, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: c.border, opacity: pressed ? 0.6 : 1 })}
           >
-            <Text style={{ fontFamily: "monospace", fontSize: 12, color: "#1A1A18", letterSpacing: 0.5 }}>Photo Library</Text>
+            <Text style={{ fontFamily: "monospace", fontSize: 12, color: c.ink, letterSpacing: 0.5 }}>{t("attach.photoLibrary")}</Text>
+          </Pressable>
+          <Pressable
+            onPress={() => choose(onFile)}
+            style={({ pressed }) => ({ paddingHorizontal: 14, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: c.border, opacity: pressed ? 0.6 : 1 })}
+          >
+            <Text style={{ fontFamily: "monospace", fontSize: 12, color: c.ink, letterSpacing: 0.5 }}>{t("attach.file")}</Text>
+          </Pressable>
+          <Pressable
+            onPress={() => choose(onVoice)}
+            style={({ pressed }) => ({ paddingHorizontal: 14, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: c.border, opacity: pressed ? 0.6 : 1 })}
+          >
+            <Text style={{ fontFamily: "monospace", fontSize: 12, color: c.ink, letterSpacing: 0.5 }}>{t("attach.voice")}</Text>
           </Pressable>
           <Pressable
             onPress={() => choose(onPoll)}
             style={({ pressed }) => ({ paddingHorizontal: 14, paddingVertical: 14, opacity: pressed ? 0.6 : 1 })}
           >
-            <Text style={{ fontFamily: "monospace", fontSize: 12, color: "#1A1A18", letterSpacing: 0.5 }}>Poll</Text>
+            <Text style={{ fontFamily: "monospace", fontSize: 12, color: c.ink, letterSpacing: 0.5 }}>{t("attach.poll")}</Text>
           </Pressable>
         </View>
       </Pressable>

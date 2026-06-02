@@ -1,0 +1,258 @@
+{
+  "common": {
+    "save": "Save",
+    "cancel": "Cancel",
+    "create": "Create",
+    "delete": "Delete",
+    "yes": "Yes",
+    "back": "Back"
+  },
+  "login": {
+    "tagline": "Threads. Groups. Status. Nothing else.",
+    "email": "Email address",
+    "emailPlaceholder": "you@example.com",
+    "password": "Password",
+    "signIn": "Sign in"
+  },
+  "tabs": {
+    "groups": "Groups",
+    "search": "Search",
+    "settings": "Settings"
+  },
+  "groups": {
+    "empty": "No groups yet. Ask your admin to add you to one.",
+    "newGroup": "New group",
+    "namePlaceholder": "Group name",
+    "createFailed": "Could not create group"
+  },
+  "search": {
+    "title": "search",
+    "placeholder": "Search threads and messages...",
+    "threads": "Threads",
+    "messages": "Messages",
+    "noResults": "No results for \"{{query}}\"",
+    "minChars": "Type at least 2 characters to search"
+  },
+  "settings": {
+    "title": "Settings",
+    "photo": "Photo",
+    "changePhoto": "Change photo",
+    "uploading": "Uploading…",
+    "displayName": "Display name",
+    "tapToEdit": "Tap to edit",
+    "email": "Email",
+    "appearance": "Appearance",
+    "system": "System",
+    "light": "Light",
+    "dark": "Dark",
+    "signOut": "Sign out",
+    "signOutTitle": "Sign out",
+    "signOutBody": "Are you sure?",
+    "signOutConfirmWeb": "Sign out?",
+    "uploadFailed": "Upload failed"
+  },
+  "group": {
+    "empty": "No threads yet. Tap + to start one.",
+    "emptyFiltered": "No threads match this filter.",
+    "newThread": "New thread",
+    "threadTitlePlaceholder": "Thread title",
+    "filterAll": "All",
+    "filterOpen": "Open",
+    "filterUrgent": "Urgent",
+    "filterDone": "Done"
+  },
+  "members": {
+    "title": "Members",
+    "admin": "Admin",
+    "member": "Member",
+    "you": "You",
+    "makeAdmin": "Make admin",
+    "remove": "Remove from group",
+    "removeTitle": "Remove member",
+    "removeBody": "Remove {{name}} from this group?",
+    "makeAdminTitle": "Transfer admin",
+    "makeAdminBody": "Make {{name}} the admin? You will become a regular member.",
+    "empty": "No members"
+  },
+  "groupSettings": {
+    "rename": "Rename group",
+    "renameTitle": "Rename group",
+    "renameFailed": "Could not rename group",
+    "leave": "Leave group",
+    "leaveTitle": "Leave group",
+    "leaveBody": "Leave {{name}}? You will lose access to its threads.",
+    "leaveFailed": "Could not leave group"
+  },
+  "invite": {
+    "title": "Invite member",
+    "emailPlaceholder": "Email address",
+    "send": "Send invite",
+    "sending": "Sending…",
+    "pending": "Pending invites",
+    "sentTitle": "Invite sent",
+    "sentBody": "An invite was sent to {{email}}.",
+    "failed": "Could not send invite",
+    "revokeTitle": "Revoke invite",
+    "revokeBody": "Revoke the invite for {{email}}?"
+  },
+  "thread": {
+    "empty": "No messages yet",
+    "closed": "Thread closed — reopen to send messages",
+    "messagePlaceholder": "Message...",
+    "editing": "Editing",
+    "replyingTo": "Replying to {{author}}",
+    "typingOne": "{{name}} is typing…",
+    "typingMany": "{{names}} and {{last}} are typing…",
+    "deleteThreadTitle": "Delete thread",
+    "deleteThreadBody": "This deletes the thread and all its messages. Can't be undone.",
+    "deleteThreadConfirmWeb": "Delete this thread and all its messages?",
+    "deleteThreadFailedTitle": "Delete failed",
+    "deleteThreadFailed": "Could not delete thread",
+    "deleteMessageTitle": "Delete message",
+    "deleteMessageBody": "This can't be undone.",
+    "deleteMessageConfirmWeb": "Delete this message?",
+    "sendFailedTitle": "Send failed",
+    "sendFailed": "Send failed",
+    "statusUpdateFailedTitle": "Update failed",
+    "statusUpdateFailed": "Could not update status",
+    "cameraNeededTitle": "Camera access needed",
+    "cameraNeededBody": "Enable camera access in Settings to take a photo."
+  },
+  "status": {
+    "reopenConfirm": "Reopen thread?"
+  },
+  "threadMeta": {
+    "title": "Thread details",
+    "owner": "Assignee",
+    "unassigned": "Unassigned",
+    "dueDate": "Due date",
+    "setDueDate": "Set date",
+    "noDueDate": "No due date",
+    "clear": "Clear",
+    "labels": "Labels",
+    "addLabel": "Add label…",
+    "overdue": "Overdue",
+    "due": "Due {{date}}"
+  },
+  "message": {
+    "deleted": "This message was deleted.",
+    "edited": "(edited)"
+  },
+  "profile": {
+    "online": "Online now"
+  },
+  "notifications": {
+    "title": "Notifications",
+    "pauseAll": "Pause all notifications",
+    "pauseHint": "Stop all push notifications from Coldsoup.",
+    "mutedGroups": "Muted groups",
+    "noMuted": "Nothing muted.",
+    "unmute": "Unmute"
+  },
+  "account": {
+    "delete": "Delete account",
+    "deleteHint": "Permanently delete your account. This cannot be undone.",
+    "confirmTitle": "Delete account",
+    "confirmBody": "This permanently deletes your account. Your messages stay but show no author. Type DELETE to confirm.",
+    "confirmWord": "DELETE",
+    "confirmPlaceholder": "Type DELETE",
+    "deleting": "Deleting…",
+    "failed": "Could not delete account"
+  },
+  "appLock": {
+    "title": "Locked",
+    "unlock": "Unlock",
+    "prompt": "Unlock Coldsoup",
+    "setting": "Require unlock",
+    "settingHint": "Use Face ID, Touch ID, or your passcode to open the app.",
+    "unavailableTitle": "Not available",
+    "unavailableBody": "Biometric or passcode authentication isn't set up on this device."
+  },
+  "delivery": {
+    "sending": "Sending…",
+    "failed": "Failed to send",
+    "retry": "Retry"
+  },
+  "notFound": {
+    "title": "Page not found",
+    "goHome": "Go home"
+  },
+  "a11y": {
+    "sendMessage": "Send message",
+    "saveEdit": "Save edit",
+    "addAttachment": "Add attachment",
+    "removeAttachment": "Remove attachment",
+    "cancelReply": "Cancel reply",
+    "cancelEdit": "Cancel edit",
+    "deleteThread": "Delete thread",
+    "newThread": "New thread",
+    "changePhoto": "Change profile photo",
+    "themeOption": "{{mode}} theme",
+    "setStatus": "Set status to {{status}}",
+    "reactWith": "React with {{emoji}}",
+    "playAudio": "Play audio",
+    "pauseAudio": "Pause audio",
+    "startRecording": "Start recording",
+    "stopRecording": "Stop recording",
+    "closeImage": "Close image",
+    "votePoll": "Vote for {{option}}",
+    "addOption": "Add poll option",
+    "openThread": "Open thread {{title}}",
+    "openGroup": "Open group {{name}}",
+    "newGroup": "Create group",
+    "openMessage": "Open message in {{thread}}",
+    "openMembers": "View members",
+    "openProfile": "View {{name}}'s profile",
+    "groupOptions": "{{name}} — group options and members",
+    "switchGroup": "Switch group",
+    "threadDetails": "Thread details",
+    "muteThread": "Mute this thread",
+    "unmuteThread": "Unmute this thread",
+    "muteGroup": "Mute this group",
+    "unmuteGroup": "Unmute this group",
+    "memberActions": "Options for {{name}}",
+    "invite": "Invite member",
+    "revokeInvite": "Revoke invite for {{email}}",
+    "retrySend": "Retry sending message",
+    "dismissFailed": "Dismiss failed message",
+    "jumpToReply": "Go to the replied-to message"
+  },
+  "actions": {
+    "copy": "Copy",
+    "reply": "Reply",
+    "edit": "Edit",
+    "delete": "Delete"
+  },
+  "attach": {
+    "takePhoto": "Take Photo",
+    "photoLibrary": "Photo Library",
+    "file": "File",
+    "voice": "Voice Message",
+    "poll": "Poll"
+  },
+  "voice": {
+    "title": "Voice message",
+    "tapToRecord": "Tap to record",
+    "recording": "Recording…",
+    "attach": "Attach",
+    "rerecord": "Re-record",
+    "permissionTitle": "Microphone access needed",
+    "permissionBody": "Enable microphone access in Settings to record a voice message."
+  },
+  "poll": {
+    "create": "Create poll",
+    "question": "Question",
+    "questionPlaceholder": "What do you want to ask?",
+    "options": "Options",
+    "optionsHint": "(optional — anyone can add more later)",
+    "optionPlaceholder": "Option {{index}}",
+    "optionText": "Option text…",
+    "add": "Add",
+    "addOption": "+ add option",
+    "sending": "Sending…",
+    "sendPoll": "Send poll",
+    "votes_one": "{{count}} vote",
+    "votes_other": "{{count}} votes",
+    "noVotes": "No votes"
+  }
+}

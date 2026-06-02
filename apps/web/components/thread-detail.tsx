@@ -7,13 +7,14 @@ import type { RealtimeChannel } from "@supabase/supabase-js";
 import { trpc } from "@/lib/trpc/client";
 import { createClient } from "@/lib/supabase/client";
 import { useUnread } from "@/lib/unread-context";
-import { validateFile, resizeImageIfNeeded } from "@/lib/file-utils";
+import { useOnline } from "@/lib/presence-context";
+import { validateFile, resizeImageIfNeeded, attachmentTypeFor } from "@/lib/file-utils";
 
 type ThreadStatus = "OPEN" | "URGENT" | "DONE";
 
 type Attachment = {
   url: string;
-  type: "image" | "audio";
+  type: "image" | "audio" | "video" | "file";
   name: string;
 };
 
@@ -75,7 +76,74 @@ type Message = {
     display_name: string;
     avatar_url: string | null;
   } | null;
+  delivery_status?: "sending" | "failed";
+  fail_id?: string;
 };
+
+type FailedEntry = {
+  failId: string;
+  body: string;
+  attachments: Attachment[];
+  replyToId?: string;
+  replyTo: ReplyTo | null;
+  created_at: string;
+};
+
+type ProfileTarget = {
+  id: string | null;
+  name: string;
+  avatarUrl: string | null;
+};
+
+const DRAFT_PREFIX = "coldsoup:draft:";
+const OUTBOX_PREFIX = "coldsoup:outbox:";
+
+function draftKey(threadId: string) {
+  return `${DRAFT_PREFIX}${threadId}`;
+}
+
+function outboxKey(threadId: string) {
+  return `${OUTBOX_PREFIX}${threadId}`;
+}
+
+function readDraft(threadId: string): string {
+  try {
+    return localStorage.getItem(draftKey(threadId)) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function writeDraft(threadId: string, value: string) {
+  try {
+    if (value.trim()) localStorage.setItem(draftKey(threadId), value);
+    else localStorage.removeItem(draftKey(threadId));
+  } catch {}
+}
+
+function clearDraft(threadId: string) {
+  try {
+    localStorage.removeItem(draftKey(threadId));
+  } catch {}
+}
+
+function readOutbox(threadId: string): FailedEntry[] {
+  try {
+    const raw = localStorage.getItem(outboxKey(threadId));
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as FailedEntry[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeOutbox(threadId: string, entries: FailedEntry[]) {
+  try {
+    if (entries.length === 0) localStorage.removeItem(outboxKey(threadId));
+    else localStorage.setItem(outboxKey(threadId), JSON.stringify(entries));
+  } catch {}
+}
 
 function PollView({
   poll: initialPoll,
@@ -406,12 +474,14 @@ function formatDate(dateStr: string): string {
   });
 }
 
+const MENTION_SPECIALS = ["everyone", "here"];
+
 function renderBody(
   body: string,
   members: { id: string; display_name: string }[],
   myId: string,
 ): React.ReactNode {
-  if (!members.length || !body) return body;
+  if (!body) return body;
 
   const sorted = [...members].sort(
     (a, b) => b.display_name.length - a.display_name.length,
@@ -419,7 +489,7 @@ function renderBody(
   const escaped = sorted.map((m) =>
     m.display_name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
   );
-  const regex = new RegExp(`@(${escaped.join("|")})`, "g");
+  const regex = new RegExp(`@(${[...escaped, ...MENTION_SPECIALS].join("|")})`, "g");
 
   const parts: React.ReactNode[] = [];
   let lastIndex = 0;
@@ -625,10 +695,14 @@ function Avatar({
   name,
   avatarUrl,
   pulsing,
+  size = 28,
+  fontSize = 10,
 }: {
   name: string;
   avatarUrl?: string | null;
   pulsing?: boolean;
+  size?: number;
+  fontSize?: number;
 }) {
   const [imgError, setImgError] = useState(false);
 
@@ -646,10 +720,14 @@ function Avatar({
       <Image
         src={avatarUrl}
         alt={name}
-        width={28}
-        height={28}
-        className="w-7 h-7 rounded-sm object-cover flex-shrink-0"
-        style={pulsing ? { animation: "breath 1.6s ease-out" } : undefined}
+        width={size}
+        height={size}
+        className="rounded-sm object-cover flex-shrink-0"
+        style={{
+          width: size,
+          height: size,
+          animation: pulsing ? "breath 1.6s ease-out" : undefined,
+        }}
         onError={() => setImgError(true)}
       />
     );
@@ -657,8 +735,11 @@ function Avatar({
 
   return (
     <div
-      className="w-7 h-7 flex-shrink-0 flex items-center justify-center border border-border font-mono text-[10px] font-semibold"
+      className="flex-shrink-0 flex items-center justify-center border border-border font-mono font-semibold"
       style={{
+        width: size,
+        height: size,
+        fontSize,
         background: `hsl(${hue} 30% 92%)`,
         color: `hsl(${hue} 40% 28%)`,
         animation: pulsing ? "breath 1.6s ease-out" : undefined,
@@ -667,6 +748,80 @@ function Avatar({
     >
       {initials}
     </div>
+  );
+}
+
+function ProfileCard({
+  target,
+  onClose,
+}: {
+  target: ProfileTarget | null;
+  onClose: () => void;
+}) {
+  const { isOnline } = useOnline();
+  if (!target) return null;
+  const online = isOnline(target.id);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-ink/25 flex items-center justify-center p-6"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="w-full max-w-xs bg-surface border border-border p-6 shadow-lg text-center">
+        <div className="flex justify-end -mt-2 -mr-2">
+          <button
+            onClick={onClose}
+            className="font-mono text-lg leading-none text-muted hover:text-ink"
+          >
+            x
+          </button>
+        </div>
+        <div className="flex justify-center">
+          <Avatar name={target.name} avatarUrl={target.avatarUrl} size={96} fontSize={32} />
+        </div>
+        <p className="mt-4 text-base font-semibold text-ink break-words">
+          {target.name}
+        </p>
+        {online && (
+          <p className="mt-2 inline-flex items-center gap-1.5 font-mono text-[11px] text-online uppercase tracking-[0.08em]">
+            <span className="w-2 h-2 rounded-full bg-online" />
+            online
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function LinkPreview({ url }: { url: string }) {
+  const { data } = trpc.links.unfurl.useQuery(
+    { url },
+    { staleTime: 60 * 60 * 1000, retry: false },
+  );
+  if (!data || !data.title) return null;
+  let domain = "";
+  try { domain = new URL(url).hostname.replace(/^www\./, ""); } catch { /* ignore */ }
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="block mt-2 max-w-sm border border-border bg-surface-2 hover:border-pastel-deep transition-colors overflow-hidden"
+    >
+      {data.image_url && (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={data.image_url} alt="" className="w-full h-36 object-cover" />
+      )}
+      <div className="p-2">
+        <p className="text-[13px] font-semibold text-ink line-clamp-2">{data.title}</p>
+        {data.description && (
+          <p className="text-[11px] text-muted line-clamp-2 mt-0.5">{data.description}</p>
+        )}
+        <p className="font-mono text-[10px] text-muted-2 mt-1 truncate">{domain}</p>
+      </div>
+    </a>
   );
 }
 
@@ -871,6 +1026,229 @@ function ImageGallery({
   );
 }
 
+function formatDueDate(ymd: string): string {
+  return new Date(`${ymd}T00:00:00`).toLocaleDateString("en", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+function ThreadDetailsPanel({
+  threadId,
+  groupId,
+  onClose,
+}: {
+  threadId: string;
+  groupId: string;
+  onClose: () => void;
+}) {
+  const router = useRouter();
+  const utils = trpc.useUtils();
+  const { data: meta, isLoading } = trpc.threads.get.useQuery({ threadId });
+  const { data: notifPrefs } = trpc.notifications.prefs.useQuery();
+  const [dueDate, setDueDate] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!meta) return;
+    setDueDate((meta as { due_date: string | null }).due_date ?? null);
+  }, [meta]);
+
+  const creator =
+    (meta as
+      | {
+          creator?: {
+            id: string;
+            display_name: string;
+            avatar_url: string | null;
+          } | null;
+        }
+      | undefined)?.creator ?? null;
+  const isMuted = !!notifPrefs?.threadIds.includes(threadId);
+
+  const setMeta = trpc.threads.setMeta.useMutation({
+    onSuccess: () => {
+      utils.threads.get.invalidate({ threadId });
+      utils.threads.list.invalidate({ groupId });
+      onClose();
+    },
+    onError: (err) => setError(err.message),
+  });
+
+  const setMute = trpc.notifications.setMute.useMutation({
+    onMutate: async ({ targetId, muted }) => {
+      await utils.notifications.prefs.cancel();
+      const prev = utils.notifications.prefs.getData();
+      utils.notifications.prefs.setData(undefined, (old) => {
+        if (!old) return old;
+        const set = new Set(old.threadIds);
+        if (muted) set.add(targetId);
+        else set.delete(targetId);
+        return { ...old, threadIds: Array.from(set) };
+      });
+      return { prev };
+    },
+    onError: (err, _vars, ctx) => {
+      if (ctx?.prev) utils.notifications.prefs.setData(undefined, ctx.prev);
+      setError(err.message);
+    },
+    onSettled: () => utils.notifications.prefs.invalidate(),
+  });
+
+  const deleteThread = trpc.threads.delete.useMutation({
+    onSuccess: () => {
+      utils.threads.list.invalidate({ groupId });
+      onClose();
+      router.push(`/g/${groupId}`);
+    },
+    onError: (err) => setError(err.message),
+  });
+
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-ink/25 flex items-end md:items-stretch md:justify-end"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="w-full md:w-[360px] max-h-[88vh] md:max-h-none bg-surface border-t md:border-t-0 md:border-l border-border overflow-y-auto shadow-lg">
+        <div className="px-4 py-3 border-b border-border flex items-center justify-between">
+          <h2 className="font-mono text-sm font-semibold text-ink">
+            Thread details
+          </h2>
+          <button
+            onClick={onClose}
+            className="font-mono text-lg leading-none text-muted hover:text-ink transition-colors"
+          >
+            x
+          </button>
+        </div>
+
+        <div className="p-4 space-y-6">
+          {isLoading ? (
+            <div className="h-28 bg-border/40 animate-pulse" />
+          ) : (
+            <>
+              <div>
+                <p className="font-mono text-[10px] text-muted uppercase tracking-wider mb-2">
+                  Assignee
+                </p>
+                {creator ? (
+                  <div className="flex items-center gap-2">
+                    <Avatar
+                      name={creator.display_name}
+                      avatarUrl={creator.avatar_url}
+                    />
+                    <span className="text-sm text-ink">
+                      {creator.display_name}
+                    </span>
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted">Unassigned</p>
+                )}
+              </div>
+
+              <div>
+                <label
+                  htmlFor="thread-detail-due-date"
+                  className="block font-mono text-[10px] text-muted uppercase tracking-wider mb-2"
+                >
+                  Due date
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    id="thread-detail-due-date"
+                    type="date"
+                    value={dueDate ?? ""}
+                    onChange={(e) => setDueDate(e.target.value || null)}
+                    className="flex-1 border border-border bg-surface-2 px-3 py-2 text-sm text-ink focus:outline-none focus:border-ink"
+                  />
+                  {dueDate && (
+                    <button
+                      type="button"
+                      onClick={() => setDueDate(null)}
+                      className="font-mono text-xs text-muted hover:text-ink px-2 py-2"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+                {dueDate && (
+                  <p className="font-mono text-[10px] text-muted mt-1">
+                    {formatDueDate(dueDate)}
+                  </p>
+                )}
+              </div>
+
+              {error && (
+                <p className="text-xs text-red-600 whitespace-pre-wrap">
+                  {error}
+                </p>
+              )}
+
+              <button
+                onClick={() => setMeta.mutate({ threadId, dueDate })}
+                disabled={setMeta.isPending}
+                className="w-full bg-ink text-surface font-mono text-sm py-2.5 disabled:opacity-40 hover:bg-ink/90 transition-colors"
+              >
+                {setMeta.isPending ? "Saving..." : "Save details"}
+              </button>
+
+              <div className="border-t border-border pt-4 space-y-2">
+                <button
+                  onClick={() =>
+                    setMute.mutate({
+                      targetType: "thread",
+                      targetId: threadId,
+                      muted: !isMuted,
+                    })
+                  }
+                  disabled={setMute.isPending}
+                  className="w-full border border-border bg-surface-2 text-ink font-mono text-xs py-2.5 hover:border-border-strong transition-colors disabled:opacity-40"
+                >
+                  {isMuted ? "Unmute thread" : "Mute thread"}
+                </button>
+
+                {confirmDelete ? (
+                  <div className="border border-red-300 p-3 space-y-2">
+                    <p className="font-mono text-[11px] text-red-600">
+                      Delete this thread and all messages?
+                    </p>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => deleteThread.mutate({ threadId })}
+                        disabled={deleteThread.isPending}
+                        className="flex-1 bg-red-600 text-white font-mono text-xs py-2 disabled:opacity-40"
+                      >
+                        {deleteThread.isPending ? "Deleting..." : "Delete"}
+                      </button>
+                      <button
+                        onClick={() => setConfirmDelete(false)}
+                        className="font-mono text-xs text-muted hover:text-ink px-3 py-2"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setConfirmDelete(true)}
+                    className="w-full border border-red-300 text-red-600 font-mono text-xs py-2.5 hover:bg-red-50 transition-colors"
+                  >
+                    Delete thread
+                  </button>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function StatusControl({
   threadId,
   currentStatus,
@@ -1012,14 +1390,20 @@ export function ThreadDetail({
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [threadStatus, setThreadStatus] = useState<ThreadStatus>(initialStatus);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [showDetails, setShowDetails] = useState(false);
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [activeLightbox, setActiveLightbox] = useState<Attachment | null>(null);
   const [activeTooltip, setActiveTooltip] = useState<string | null>(null);
   const tooltipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const outboxLoadedRef = useRef(false);
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
   const [showPollCreate, setShowPollCreate] = useState(false);
+  const [failedSends, setFailedSends] = useState<FailedEntry[]>([]);
+  const [profileTarget, setProfileTarget] = useState<ProfileTarget | null>(null);
+  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -1048,14 +1432,55 @@ export function ThreadDetail({
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const [mentionIndex, setMentionIndex] = useState(0);
 
+  const markReadServer = trpc.threads.markRead.useMutation();
+  const { data: readReceipts = [] } = trpc.threads.reads.useQuery(
+    { threadId },
+    { enabled: !!threadId },
+  );
+
   useEffect(() => {
     markRead(threadId, groupId);
   }, [threadId, groupId, markRead]);
+
+  // Server-side read receipt — mark on open and whenever new messages arrive.
+  useEffect(() => {
+    if (messages.length > 0) markReadServer.mutate({ threadId });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [threadId, messages.length]);
 
   useEffect(() => {
     isInitialLoad.current = true;
     prevMsgCountRef.current = 0;
   }, [threadId]);
+
+  useEffect(() => {
+    setBody(readDraft(threadId));
+    setReplyingTo(null);
+    setEditingMessageId(null);
+    setEditBody("");
+    setPendingFiles([]);
+    setMentionQuery(null);
+  }, [threadId]);
+
+  useEffect(() => {
+    if (editingMessageId) return;
+    if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
+    draftTimerRef.current = setTimeout(() => writeDraft(threadId, body), 400);
+    return () => {
+      if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
+    };
+  }, [body, editingMessageId, threadId]);
+
+  useEffect(() => {
+    outboxLoadedRef.current = false;
+    setFailedSends(readOutbox(threadId));
+    outboxLoadedRef.current = true;
+  }, [threadId]);
+
+  useEffect(() => {
+    if (!outboxLoadedRef.current) return;
+    writeOutbox(threadId, failedSends);
+  }, [failedSends, threadId]);
 
   const createPoll = trpc.polls.create.useMutation({
     onSuccess: (msg) => {
@@ -1149,11 +1574,15 @@ export function ThreadDetail({
 
   const mentionSuggestions = useMemo(() => {
     if (mentionQuery === null || !workspaceMembers) return [];
-    if (mentionQuery === "") return workspaceMembers;
     const q = mentionQuery.toLowerCase();
-    return workspaceMembers.filter((m) =>
-      m.display_name.toLowerCase().includes(q),
-    );
+    const specials = MENTION_SPECIALS
+      .filter((s) => mentionQuery === "" || s.includes(q))
+      .map((s) => ({ id: `__special_${s}`, display_name: s, avatar_url: null }));
+    const matched =
+      mentionQuery === ""
+        ? workspaceMembers
+        : workspaceMembers.filter((m) => m.display_name.toLowerCase().includes(q));
+    return [...specials, ...matched];
   }, [mentionQuery, workspaceMembers]);
 
   const { data: loadedMessages, isLoading } = trpc.messages.list.useQuery(
@@ -1355,12 +1784,24 @@ export function ThreadDetail({
           );
         },
       )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "thread_reads",
+          filter: `thread_id=eq.${threadId}`,
+        },
+        () => {
+          utils.threads.reads.invalidate({ threadId });
+        },
+      )
       .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [threadId]);
+  }, [threadId, utils.threads.reads]);
 
   useEffect(() => {
     const supabase = createClient();
@@ -1389,12 +1830,90 @@ export function ThreadDetail({
   }, [threadId, groupId, utils]);
 
   const sendMessage = trpc.messages.send.useMutation({
-    onSuccess: (msg) => {
+    onMutate: (vars) => {
+      const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      const messageBody = vars.body ?? "";
+      const replyTo =
+        vars.replyToId
+          ? replyingTo?.id === vars.replyToId
+            ? {
+                id: replyingTo.id,
+                body: replyingTo.body,
+                author_name: replyingTo.authorName,
+              }
+            : (() => {
+                const found = messages.find((m) => m.id === vars.replyToId);
+                return found
+                  ? {
+                      id: found.id,
+                      body: found.body.slice(0, 120),
+                      author_name:
+                        found.profiles?.display_name ?? "Unknown",
+                    }
+                  : null;
+              })()
+          : null;
+      const tempMessage: Message = {
+        id: tempId,
+        body: messageBody,
+        created_at: new Date().toISOString(),
+        edited_at: null,
+        is_deleted: false,
+        user_id: myInfo?.id ?? null,
+        thread_id: threadId,
+        poll_id: null,
+        poll: null,
+        attachments: vars.attachments ?? [],
+        reactions: REACTION_DEFAULTS.map((r) => ({ ...r })),
+        reply_to_id: vars.replyToId ?? null,
+        reply_to: replyTo,
+        profiles: myInfo
+          ? {
+              id: myInfo.id,
+              display_name: myInfo.display_name,
+              avatar_url: myInfo.avatar_url,
+            }
+          : null,
+        delivery_status: "sending",
+      };
+      const failed: FailedEntry = {
+        failId: tempId,
+        body: messageBody,
+        attachments: vars.attachments ?? [],
+        replyToId: vars.replyToId,
+        replyTo,
+        created_at: tempMessage.created_at,
+      };
+      setMessages((prev) => [...prev, tempMessage]);
+      return { tempId, failed };
+    },
+    onSuccess: (msg, _vars, ctx) => {
+      const m = msg as unknown as Message;
       setMessages((prev) => {
-        const m = msg as unknown as Message;
+        if (ctx?.tempId && prev.some((x) => x.id === ctx.tempId)) {
+          if (prev.some((x) => x.id === m.id)) {
+            return prev.filter((x) => x.id !== ctx.tempId);
+          }
+          return prev.map((x) => (x.id === ctx.tempId ? m : x));
+        }
         if (prev.some((x) => x.id === m.id)) return prev;
         return [...prev, m];
       });
+    },
+    onError: (_err, _vars, ctx) => {
+      if (ctx?.tempId) {
+        setMessages((prev) => prev.filter((m) => m.id !== ctx.tempId));
+      }
+      if (ctx?.failed) {
+        setFailedSends((prev) =>
+          prev.some((f) => f.failId === ctx.failed.failId)
+            ? prev
+            : [...prev, ctx.failed],
+        );
+      }
+    },
+    onSettled: () => {
+      utils.threads.list.invalidate({ groupId });
     },
   });
 
@@ -1445,7 +1964,7 @@ export function ThreadDetail({
         } = supabase.storage.from("attachments").getPublicUrl(path);
         return {
           url: publicUrl,
-          type: file.type.startsWith("image/") ? "image" : ("audio" as const),
+          type: attachmentTypeFor(raw),
           name: raw.name,
         };
       }),
@@ -1536,6 +2055,8 @@ export function ThreadDetail({
         attachments,
         replyToId: replyingTo?.id,
       });
+      if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
+      clearDraft(threadId);
       setBody("");
       setPendingFiles([]);
       setReplyingTo(null);
@@ -1606,6 +2127,31 @@ export function ThreadDetail({
     setPendingFiles((prev) => prev.filter((_, i) => i !== index));
   }
 
+  function retryFailed(entry: FailedEntry) {
+    setFailedSends((prev) => prev.filter((f) => f.failId !== entry.failId));
+    sendMessage.mutate({
+      threadId,
+      body: entry.body,
+      attachments: entry.attachments,
+      replyToId: entry.replyToId,
+    });
+  }
+
+  function dismissFailed(failId: string) {
+    setFailedSends((prev) => prev.filter((f) => f.failId !== failId));
+  }
+
+  async function copyMessage(messageId: string, text: string) {
+    if (!text.trim()) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedMessageId(messageId);
+      setTimeout(() => setCopiedMessageId(null), 1600);
+    } catch {
+      setUploadError("Could not copy message.");
+    }
+  }
+
   function handleDrop(e: React.DragEvent) {
     e.preventDefault();
     const dropped = Array.from(e.dataTransfer.files);
@@ -1624,9 +2170,75 @@ export function ThreadDetail({
     e.preventDefault();
   }
 
+  const failedMessages = useMemo<Message[]>(
+    () =>
+      failedSends.map((entry) => ({
+        id: `failed-${entry.failId}`,
+        body: entry.body,
+        created_at: entry.created_at,
+        edited_at: null,
+        is_deleted: false,
+        user_id: myInfo?.id ?? null,
+        thread_id: threadId,
+        poll_id: null,
+        poll: null,
+        attachments: entry.attachments,
+        reactions: REACTION_DEFAULTS.map((r) => ({ ...r })),
+        reply_to_id: entry.replyToId ?? null,
+        reply_to: entry.replyTo,
+        profiles: myInfo
+          ? {
+              id: myInfo.id,
+              display_name: myInfo.display_name,
+              avatar_url: myInfo.avatar_url,
+            }
+          : { id: "me", display_name: "You", avatar_url: null },
+        delivery_status: "failed",
+        fail_id: entry.failId,
+      })),
+    [failedSends, myInfo, threadId],
+  );
+
+  const displayMessages = useMemo(
+    () =>
+      [...messages, ...failedMessages].sort(
+        (a, b) =>
+          new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+      ),
+    [messages, failedMessages],
+  );
+
+  const seenReceipt = useMemo(() => {
+    if (!myInfo) return null;
+    const rows = readReceipts as Array<{
+      user_id: string;
+      last_read_at: string;
+      display_name: string;
+      avatar_url: string | null;
+    }>;
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const msg = messages[i];
+      if (msg.user_id !== myInfo.id || msg.delivery_status) continue;
+      const msgTime = new Date(msg.created_at).getTime();
+      const readers = rows
+        .filter(
+          (r) =>
+            r.user_id !== myInfo.id &&
+            new Date(r.last_read_at).getTime() >= msgTime,
+        )
+        .map((r) => ({
+          id: r.user_id,
+          name: r.display_name,
+          avatarUrl: r.avatar_url,
+        }));
+      if (readers.length > 0) return { messageId: msg.id, readers };
+    }
+    return null;
+  }, [messages, myInfo, readReceipts]);
+
   const messagesByDate = useMemo(() => {
     const groups: Array<{ date: string; messages: Message[] }> = [];
-    for (const msg of messages) {
+    for (const msg of displayMessages) {
       const dateLabel = formatDate(msg.created_at);
       const last = groups[groups.length - 1];
       if (last && last.date === dateLabel) {
@@ -1636,7 +2248,7 @@ export function ThreadDetail({
       }
     }
     return groups;
-  }, [messages]);
+  }, [displayMessages]);
 
   const isDone = threadStatus === "DONE";
   const canSend =
@@ -1709,6 +2321,12 @@ export function ThreadDetail({
               currentStatus={threadStatus}
               threadTitle={initialTitle}
             />
+            <button
+              onClick={() => setShowDetails(true)}
+              className="font-mono text-[10px] uppercase tracking-wider px-2 py-1 text-muted hover:text-ink border border-border hover:border-border-strong transition-colors"
+            >
+              details
+            </button>
             {confirmDelete ? (
               <div className="flex items-center gap-2">
                 <span className="font-mono text-[10px] text-red-600 uppercase tracking-wider">
@@ -1759,13 +2377,22 @@ export function ThreadDetail({
               </button>
             </div>
           ) : (
-            <button
-              onClick={() => setConfirmDelete(true)}
-              title="Delete thread"
-              className="md:hidden w-11 h-full flex items-center justify-center flex-shrink-0 text-muted hover:text-red-600 transition-colors"
-            >
-              {trashIcon}
-            </button>
+            <div className="md:hidden flex h-full flex-shrink-0">
+              <button
+                onClick={() => setShowDetails(true)}
+                title="Thread details"
+                className="w-11 h-full flex items-center justify-center text-muted hover:text-ink transition-colors"
+              >
+                i
+              </button>
+              <button
+                onClick={() => setConfirmDelete(true)}
+                title="Delete thread"
+                className="w-11 h-full flex items-center justify-center text-muted hover:text-red-600 transition-colors"
+              >
+                {trashIcon}
+              </button>
+            </div>
           )}
         </div>
 
@@ -1786,18 +2413,18 @@ export function ThreadDetail({
         className="flex-1 overflow-y-auto px-4 md:px-6 py-3 md:py-4"
       >
         {isLoading ? (
-          <div className="space-y-4">
-            {[1, 2, 3].map((i) => (
+          <div className="flex flex-col justify-end min-h-full space-y-4">
+            {[0, 1, 2, 3, 4, 5].map((i) => (
               <div key={i} className="flex gap-3">
                 <div className="w-7 h-7 bg-border animate-pulse" />
                 <div className="flex-1 space-y-1.5">
                   <div className="h-3 w-24 bg-border animate-pulse" />
-                  <div className="h-4 w-64 bg-border animate-pulse" />
+                  <div className="h-4 bg-border animate-pulse" style={{ width: `${45 + ((i * 23) % 45)}%` }} />
                 </div>
               </div>
             ))}
           </div>
-        ) : messages.length === 0 ? (
+        ) : displayMessages.length === 0 ? (
           <div className="flex items-center justify-center h-32">
             <p className="font-mono text-sm text-muted">
               No messages yet. Start the conversation.
@@ -1837,6 +2464,14 @@ export function ThreadDetail({
                     const name = msg.profiles?.display_name ?? "Unknown";
                     const isOwnMessage = msg.user_id === myInfo?.id;
                     const isEditing = editingMessageId === msg.id;
+                    const isLocalMessage = !!msg.delivery_status;
+                    const failedEntry = msg.fail_id
+                      ? failedSends.find((f) => f.failId === msg.fail_id)
+                      : undefined;
+                    const seenReaders =
+                      seenReceipt?.messageId === msg.id
+                        ? seenReceipt.readers
+                        : [];
 
                     return (
                       <div
@@ -1869,10 +2504,23 @@ export function ThreadDetail({
                         {/* Avatar column */}
                         <div className="w-7 flex-shrink-0">
                           {!isSameAuthor && (
-                            <Avatar
-                              name={name}
-                              avatarUrl={msg.profiles?.avatar_url}
-                            />
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setProfileTarget({
+                                  id: msg.user_id,
+                                  name,
+                                  avatarUrl: msg.profiles?.avatar_url ?? null,
+                                })
+                              }
+                              className="block text-left hover:opacity-80 transition-opacity"
+                              title={`Open ${name}`}
+                            >
+                              <Avatar
+                                name={name}
+                                avatarUrl={msg.profiles?.avatar_url}
+                              />
+                            </button>
                           )}
                         </div>
 
@@ -1987,6 +2635,10 @@ export function ThreadDetail({
                                     )}
                                   </p>
                                 )}
+                                {!msg.is_deleted && (() => {
+                                  const u = msg.body?.match(/https?:\/\/[^\s]+/i)?.[0];
+                                  return u ? <LinkPreview url={u} /> : null;
+                                })()}
                                 {msg.edited_at && (
                                   <span className="font-mono text-[10px] text-muted-2 ml-0.5">
                                     (edited)
@@ -1996,7 +2648,7 @@ export function ThreadDetail({
                             )}
 
                             {/* Hover action bar */}
-                            {!isEditing && !msg.is_deleted && (
+                            {!isEditing && !msg.is_deleted && !isLocalMessage && (
                               <div
                                 className="msg-actions select-none absolute -top-[14px] right-0 flex gap-0.5 bg-surface-2 border border-border p-0.5"
                                 style={{
@@ -2004,6 +2656,16 @@ export function ThreadDetail({
                                   transition: "opacity 160ms ease",
                                 }}
                               >
+                                {msg.body.trim().length > 0 && (
+                                  <button
+                                    onClick={() => copyMessage(msg.id, msg.body)}
+                                    title="Copy"
+                                    className="px-1.5 py-0.5 font-mono text-[10px] text-muted hover:text-ink transition-all border-none bg-transparent cursor-pointer leading-none"
+                                  >
+                                    {copiedMessageId === msg.id ? "ok" : "copy"}
+                                  </button>
+                                )}
+
                                 {/* Reply button */}
                                 <button
                                   onClick={() => {
@@ -2076,6 +2738,12 @@ export function ThreadDetail({
                               const audioAtts = msg.attachments.filter(
                                 (a) => a.type === "audio",
                               );
+                              const videoAtts = msg.attachments.filter(
+                                (a) => a.type === "video",
+                              );
+                              const fileAtts = msg.attachments.filter(
+                                (a) => a.type === "file",
+                              );
                               return (
                                 <div className="mt-2 space-y-2">
                                   {imgAtts.length === 1 && (
@@ -2118,6 +2786,19 @@ export function ThreadDetail({
                                       onOpen={setActiveLightbox}
                                     />
                                   )}
+                                  {videoAtts.length > 0 && (
+                                    <div className="flex flex-col gap-2">
+                                      {videoAtts.map((att, i) => (
+                                        <video
+                                          key={i}
+                                          controls
+                                          src={att.url}
+                                          className="max-w-xs border border-border"
+                                          style={{ maxHeight: 320 }}
+                                        />
+                                      ))}
+                                    </div>
+                                  )}
                                   {audioAtts.length > 0 && (
                                     <div className="flex flex-wrap gap-2">
                                       {audioAtts.map((att, i) => (
@@ -2147,6 +2828,29 @@ export function ThreadDetail({
                                           </span>
                                         </button>
                                       ))}
+                                    </div>
+                                  )}
+                                  {fileAtts.length > 0 && (
+                                    <div className="flex flex-wrap gap-2">
+                                      {fileAtts.map((att, i) => {
+                                        const ext = (att.name.split(".").pop() ?? "").toUpperCase().slice(0, 4);
+                                        return (
+                                          <a
+                                            key={i}
+                                            href={att.url}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="flex items-center gap-2 border border-border px-3 py-2 hover:border-pastel-deep transition-colors"
+                                          >
+                                            <span className="w-8 h-8 flex items-center justify-center bg-ink text-surface font-mono text-[9px] font-semibold flex-shrink-0">
+                                              {ext || "FILE"}
+                                            </span>
+                                            <span className="font-mono text-xs text-ink max-w-[160px] truncate">
+                                              {att.name}
+                                            </span>
+                                          </a>
+                                        );
+                                      })}
                                     </div>
                                   )}
                                 </div>
@@ -2224,6 +2928,55 @@ export function ThreadDetail({
                                   })}
                               </div>
                             )}
+
+                          {msg.delivery_status === "sending" && (
+                            <p className="font-mono text-[10px] text-muted-2 mt-1">
+                              sending...
+                            </p>
+                          )}
+
+                          {msg.delivery_status === "failed" && (
+                            <div className="flex items-center gap-2 mt-1">
+                              <button
+                                onClick={() => failedEntry && retryFailed(failedEntry)}
+                                disabled={!failedEntry}
+                                className="font-mono text-[10px] text-red-600 hover:text-red-700 disabled:opacity-40"
+                              >
+                                failed - retry
+                              </button>
+                              <button
+                                onClick={() => msg.fail_id && dismissFailed(msg.fail_id)}
+                                className="font-mono text-[13px] leading-none text-muted hover:text-ink"
+                              >
+                                x
+                              </button>
+                            </div>
+                          )}
+
+                          {seenReaders.length > 0 && (
+                            <div className="flex items-center justify-end gap-0 mt-1.5">
+                              {seenReaders.slice(0, 5).map((reader, readerIndex) => (
+                                <div
+                                  key={reader.id}
+                                  className="border border-surface rounded-sm"
+                                  style={{ marginLeft: readerIndex === 0 ? 0 : -6 }}
+                                  title={`Seen by ${reader.name}`}
+                                >
+                                  <Avatar
+                                    name={reader.name}
+                                    avatarUrl={reader.avatarUrl}
+                                    size={16}
+                                    fontSize={7}
+                                  />
+                                </div>
+                              ))}
+                              {seenReaders.length > 5 && (
+                                <span className="font-mono text-[10px] text-muted-2 ml-1">
+                                  +{seenReaders.length - 5}
+                                </span>
+                              )}
+                            </div>
+                          )}
                         </div>
                       </div>
                     );
@@ -2235,6 +2988,19 @@ export function ThreadDetail({
         )}
         <div ref={bottomRef} />
       </div>
+
+      {showDetails && (
+        <ThreadDetailsPanel
+          threadId={threadId}
+          groupId={groupId}
+          onClose={() => setShowDetails(false)}
+        />
+      )}
+
+      <ProfileCard
+        target={profileTarget}
+        onClose={() => setProfileTarget(null)}
+      />
 
       {/* Poll create modal */}
       {showPollCreate && (
@@ -2359,7 +3125,7 @@ export function ThreadDetail({
             <input
               ref={fileInputRef}
               type="file"
-              accept="image/*,audio/*"
+              accept="image/*,audio/*,video/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip"
               multiple
               className="hidden"
               onChange={handleFileChange}
