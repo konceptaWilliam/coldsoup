@@ -10,8 +10,12 @@ import {
   ActivityIndicator,
 } from "react-native";
 import { useTranslation } from "react-i18next";
+import * as WebBrowser from "expo-web-browser";
+import * as Linking from "expo-linking";
 import { supabase } from "@/lib/supabase";
 import { useTheme } from "@/lib/theme";
+
+WebBrowser.maybeCompleteAuthSession();
 
 export default function LoginScreen() {
   const { c } = useTheme();
@@ -20,6 +24,27 @@ export default function LoginScreen() {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  async function handleOAuth(provider: "google" | "apple") {
+    setError(null);
+    const redirectTo = Linking.createURL("auth-callback");
+    const { data, error } = await supabase.auth.signInWithOAuth({
+      provider,
+      options: { redirectTo, skipBrowserRedirect: true },
+    });
+    if (error || !data?.url) {
+      if (error) setError(error.message);
+      return;
+    }
+    const res = await WebBrowser.openAuthSessionAsync(data.url, redirectTo);
+    if (res.type === "success") {
+      const code = Linking.parse(res.url).queryParams?.code;
+      if (typeof code === "string") {
+        const { error: exErr } = await supabase.auth.exchangeCodeForSession(code);
+        if (exErr) setError(exErr.message);
+      }
+    }
+  }
 
   async function handleLogin() {
     if (!email.trim() || !password.trim()) return;
@@ -102,6 +127,19 @@ export default function LoginScreen() {
                 {t("login.signIn")}
               </Text>
             )}
+          </Pressable>
+
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginTop: 4 }}>
+            <View style={{ flex: 1, height: 1, backgroundColor: c.border }} />
+            <Text style={{ fontFamily: "monospace", fontSize: 10, color: c.muted2, letterSpacing: 1, textTransform: "uppercase" }}>{t("login.or")}</Text>
+            <View style={{ flex: 1, height: 1, backgroundColor: c.border }} />
+          </View>
+
+          <Pressable
+            onPress={() => handleOAuth("google")}
+            style={({ pressed }) => ({ borderWidth: 1, borderColor: c.border, backgroundColor: c.surface2, paddingVertical: 12, alignItems: "center", opacity: pressed ? 0.6 : 1 })}
+          >
+            <Text style={{ fontFamily: "monospace", fontSize: 13, color: c.ink }}>{t("login.continueGoogle")}</Text>
           </Pressable>
         </View>
       </ScrollView>

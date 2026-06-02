@@ -4,6 +4,19 @@ import { router, publicProcedure } from "../trpc";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 export const onboardingRouter = router({
+  // Public: lets a freshly-authed user (who has no profile yet, so can't call
+  // protectedProcedure) discover whether they still need to onboard.
+  status: publicProcedure.query(async ({ ctx }) => {
+    if (!ctx.user) return { authed: false, hasProfile: false };
+    const admin = createAdminClient();
+    const { data } = await admin
+      .from("profiles")
+      .select("id")
+      .eq("id", ctx.user.id)
+      .maybeSingle();
+    return { authed: true, hasProfile: !!data };
+  }),
+
   complete: publicProcedure
     .input(
       z.object({

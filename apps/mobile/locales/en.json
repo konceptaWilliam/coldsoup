@@ -12,12 +12,22 @@
     "email": "Email address",
     "emailPlaceholder": "you@example.com",
     "password": "Password",
-    "signIn": "Sign in"
+    "signIn": "Sign in",
+    "or": "or",
+    "continueGoogle": "Continue with Google",
+    "continueApple": "Continue with Apple"
   },
   "tabs": {
     "groups": "Groups",
     "search": "Search",
     "settings": "Settings"
+  },
+  "onboarding": {
+    "title": "Welcome to coldsoup",
+    "subtitle": "Pick a name others will see.",
+    "displayName": "Display name",
+    "placeholder": "Your name",
+    "continue": "Continue"
   },
   "groups": {
     "empty": "No groups yet. Ask your admin to add you to one.",

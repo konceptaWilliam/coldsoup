@@ -37,6 +37,17 @@ export default function LoginPage() {
     }
   }
 
+  async function handleOAuth(provider: "google" | "apple") {
+    setError(null);
+    const supabase = createClient();
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? window.location.origin;
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider,
+      options: { redirectTo: `${appUrl}/auth/callback` },
+    });
+    if (error) setError(error.message);
+  }
+
   async function handleForgotPassword(e: React.FormEvent) {
     e.preventDefault();
     setForgotLoading(true);
@@ -214,6 +225,23 @@ export default function LoginPage() {
             Forgot password?
           </button>
         </form>
+
+        <div className="mt-6">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="flex-1 h-px bg-border" />
+            <span className="font-mono text-[10px] text-muted-2 uppercase tracking-wider">or</span>
+            <div className="flex-1 h-px bg-border" />
+          </div>
+          <div className="space-y-2">
+            <button
+              type="button"
+              onClick={() => handleOAuth("google")}
+              className="w-full border border-border bg-surface-2 font-mono text-sm text-ink py-2.5 px-4 hover:border-ink transition-colors"
+            >
+              Continue with Google
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );

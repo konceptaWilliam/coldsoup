@@ -13,13 +13,13 @@ export const profileRouter = router({
       .from("profiles")
       .select("id, display_name, email, avatar_url")
       .eq("id", profile.id)
-      .single();
+      .maybeSingle();
 
     if (error) {
       throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: error.message });
     }
 
-    return data;
+    return data; // null when the user has no profile yet (new OAuth signup)
   }),
 
   update: protectedProcedure
