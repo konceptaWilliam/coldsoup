@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import type { RealtimeChannel } from "@supabase/supabase-js";
@@ -97,6 +97,14 @@ type ProfileTarget = {
 
 const DRAFT_PREFIX = "coldsoup:draft:";
 const OUTBOX_PREFIX = "coldsoup:outbox:";
+const BOTTOM_THRESHOLD_PX = 120;
+
+function isScrolledNearBottom(container: HTMLElement): boolean {
+  return (
+    container.scrollHeight - container.scrollTop - container.clientHeight <=
+    BOTTOM_THRESHOLD_PX
+  );
+}
 
 function draftKey(threadId: string) {
   return `${DRAFT_PREFIX}${threadId}`;
@@ -1425,9 +1433,14 @@ export function ThreadDetail({
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [hasNewMessages, setHasNewMessages] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const prevMsgCountRef = useRef(0);
+  const prevLatestMessageIdRef = useRef<string | null>(null);
+  const handledHighlightRef = useRef<string | null>(null);
+  const isNearBottomRef = useRef(true);
+  const forceScrollOnNextMessageRef = useRef(false);
   const isInitialLoad = useRef(true);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1457,6 +1470,21 @@ export function ThreadDetail({
     { enabled: !!threadId },
   );
 
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
+    bottomRef.current?.scrollIntoView({ behavior });
+    isNearBottomRef.current = true;
+    setHasNewMessages(false);
+  }, []);
+
+  const updateScrollState = useCallback(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+
+    const isNearBottom = isScrolledNearBottom(container);
+    isNearBottomRef.current = isNearBottom;
+    if (isNearBottom) setHasNewMessages(false);
+  }, []);
+
   useEffect(() => {
     markRead(threadId, groupId);
   }, [threadId, groupId, markRead]);
@@ -1470,6 +1498,11 @@ export function ThreadDetail({
   useEffect(() => {
     isInitialLoad.current = true;
     prevMsgCountRef.current = 0;
+    prevLatestMessageIdRef.current = null;
+    handledHighlightRef.current = null;
+    isNearBottomRef.current = true;
+    forceScrollOnNextMessageRef.current = false;
+    setHasNewMessages(false);
   }, [threadId]);
 
   useEffect(() => {
@@ -1520,6 +1553,9 @@ export function ThreadDetail({
       ]);
       setShowPollCreate(false);
       utils.messages.list.invalidate({ threadId });
+    },
+    onError: () => {
+      forceScrollOnNextMessageRef.current = false;
     },
   });
 
@@ -1618,40 +1654,65 @@ export function ThreadDetail({
 
   useEffect(() => {
     const count = messages.length;
-    if (count === 0) return;
+    const latestMessage = messages[count - 1] ?? null;
 
-    if (highlightMessageId) {
+    if (!latestMessage) {
+      prevMsgCountRef.current = 0;
+      prevLatestMessageIdRef.current = null;
+      setHasNewMessages(false);
+      return;
+    }
+
+    if (
+      highlightMessageId &&
+      handledHighlightRef.current !== highlightMessageId
+    ) {
       const el = document.getElementById(`message-${highlightMessageId}`);
       if (el) {
         el.scrollIntoView({ behavior: "smooth", block: "center" });
+        handledHighlightRef.current = highlightMessageId;
+        isNearBottomRef.current = latestMessage.id === highlightMessageId;
         prevMsgCountRef.current = count;
+        prevLatestMessageIdRef.current = latestMessage.id;
         isInitialLoad.current = false;
         return;
       }
     }
 
     if (isInitialLoad.current) {
-      bottomRef.current?.scrollIntoView({
-        behavior: "instant" as ScrollBehavior,
-      });
+      scrollToBottom("auto");
       isInitialLoad.current = false;
       prevMsgCountRef.current = count;
+      prevLatestMessageIdRef.current = latestMessage.id;
       return;
     }
 
-    if (count > prevMsgCountRef.current) {
-      const container = scrollContainerRef.current;
-      if (container) {
-        const distFromBottom =
-          container.scrollHeight - container.scrollTop - container.clientHeight;
-        if (distFromBottom < 200) {
-          bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-        }
+    const appendedLatestMessage =
+      count > prevMsgCountRef.current &&
+      latestMessage.id !== prevLatestMessageIdRef.current;
+
+    if (appendedLatestMessage) {
+      const isOwnMessage =
+        !!myInfo?.id && latestMessage.user_id === myInfo.id;
+      const isLocalMessage = !!latestMessage.delivery_status;
+      const shouldScrollToBottom =
+        forceScrollOnNextMessageRef.current ||
+        isNearBottomRef.current ||
+        isOwnMessage ||
+        isLocalMessage;
+
+      if (shouldScrollToBottom) {
+        requestAnimationFrame(() => scrollToBottom("smooth"));
+      } else {
+        setHasNewMessages(true);
       }
+
+      forceScrollOnNextMessageRef.current = false;
     }
 
     prevMsgCountRef.current = count;
-  }, [messages, highlightMessageId]);
+    prevLatestMessageIdRef.current = latestMessage.id;
+  }, [messages, highlightMessageId, myInfo?.id, scrollToBottom]);
 
   useEffect(() => {
     const supabase = createClient();
@@ -2131,6 +2192,8 @@ export function ThreadDetail({
       return;
 
     stopTyping();
+    forceScrollOnNextMessageRef.current = true;
+    scrollToBottom("smooth");
     setUploading(true);
     setUploadError(null);
 
@@ -2153,6 +2216,7 @@ export function ThreadDetail({
       setMentionQuery(null);
       textareaRef.current?.focus();
     } catch {
+      forceScrollOnNextMessageRef.current = false;
       setUploadError("Upload failed. Try again.");
     } finally {
       setUploading(false);
@@ -2218,6 +2282,8 @@ export function ThreadDetail({
   }
 
   function retryFailed(entry: FailedEntry) {
+    forceScrollOnNextMessageRef.current = true;
+    scrollToBottom("smooth");
     setFailedSends((prev) => prev.filter((f) => f.failId !== entry.failId));
     sendMessage.mutate({
       threadId,
@@ -2421,6 +2487,7 @@ export function ThreadDetail({
       {/* Messages */}
       <div
         ref={scrollContainerRef}
+        onScroll={updateScrollState}
         className="flex-1 overflow-y-auto px-4 md:px-6 py-3 md:py-4"
       >
         {isLoading ? (
@@ -3001,9 +3068,11 @@ export function ThreadDetail({
       {/* Poll create modal */}
       {showPollCreate && (
         <PollCreateModal
-          onSubmit={(question, options) =>
-            createPoll.mutate({ threadId, question, options })
-          }
+          onSubmit={(question, options) => {
+            forceScrollOnNextMessageRef.current = true;
+            scrollToBottom("smooth");
+            createPoll.mutate({ threadId, question, options });
+          }}
           onClose={() => setShowPollCreate(false)}
           isPending={createPoll.isPending}
         />
@@ -3021,6 +3090,17 @@ export function ThreadDetail({
 
       {/* Composer */}
       <div className="px-4 md:px-6 pt-3 md:pt-[14px] pb-4 border-t border-border flex-shrink-0 pb-safe relative">
+        {hasNewMessages && (
+          <button
+            type="button"
+            onClick={() => scrollToBottom("auto")}
+            className="absolute bottom-full left-1/2 z-10 mb-3 -translate-x-1/2 border border-border-strong bg-ink px-3 py-2 font-mono text-[11px] uppercase tracking-[0.1em] text-surface shadow-lg transition-all duration-150 hover:-translate-y-px hover:bg-ink/90"
+            aria-label="Jump to latest message"
+          >
+            new messages
+          </button>
+        )}
+
         {/* @mention suggestions dropdown */}
         {mentionSuggestions.length > 0 && (
           <div className="absolute bottom-full left-4 right-4 md:left-6 md:right-6 mb-1 bg-surface border border-border shadow-lg z-20">

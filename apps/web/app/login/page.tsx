@@ -151,9 +151,6 @@ export default function LoginPage() {
           <h1 className="font-mono text-2xl font-semibold text-ink tracking-tight">
             kallchatt
           </h1>
-          <p className="text-sm text-muted mt-1">
-            Threads. Groups. Status. Nothing else.
-          </p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
