@@ -24,11 +24,38 @@ type Thread = {
   } | null;
   messages?: Array<{
     body: string;
+    attachments?: Array<{ type: string; name?: string }> | null;
+    poll_id?: string | null;
     is_deleted?: boolean;
     created_at: string;
     profiles: { display_name: string } | null;
   }>;
 };
+
+// Preview text for the last message. Falls back to a media-type label when the
+// message has no text body (poll / image / video / audio / file).
+function lastMessagePreview(m: NonNullable<Thread["messages"]>[number]): {
+  text: string;
+  media: boolean;
+} {
+  const body = (m.body ?? "").trim();
+  if (body) return { text: body, media: false };
+  if (m.poll_id) return { text: "Poll", media: true };
+  const att = m.attachments?.[0];
+  if (att) {
+    switch (att.type) {
+      case "image":
+        return { text: "Photo", media: true };
+      case "video":
+        return { text: "Video", media: true };
+      case "audio":
+        return { text: "Voice message", media: true };
+      default:
+        return { text: att.name || "Attachment", media: true };
+    }
+  }
+  return { text: "", media: false };
+}
 
 type ThreadFilter = "ALL" | Thread["status"];
 
@@ -532,7 +559,16 @@ export function ThreadList({ groupId, groupName }: { groupId: string; groupName:
                             {lastAuthor}:
                           </span>
                         )}
-                        <span className="text-xs text-muted truncate">{lastMessage.body}</span>
+                        {(() => {
+                          const preview = lastMessagePreview(lastMessage);
+                          return (
+                            <span
+                              className={`text-xs truncate ${preview.media ? "text-muted-2 italic" : "text-muted"}`}
+                            >
+                              {preview.text}
+                            </span>
+                          );
+                        })()}
                       </>
                     )}
                   </div>
