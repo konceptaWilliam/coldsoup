@@ -538,27 +538,17 @@ export function ThreadList({ groupId, groupName }: { groupId: string; groupName:
                   </div>
                 )}
 
-                {(thread.creator || thread.due_date) && (
+                {thread.due_date && (
                   <div className="flex items-center flex-wrap gap-1.5 mt-2">
-                    {thread.creator && (
-                      <div className="flex items-center gap-1.5 min-w-0 max-w-full">
-                        <MemberAvatar member={thread.creator} />
-                        <span className="font-mono text-[10px] text-muted truncate">
-                          {thread.creator.display_name}
-                        </span>
-                      </div>
-                    )}
-                    {thread.due_date && (
-                      <span
-                        className={`font-mono text-[9px] uppercase tracking-[0.08em] px-1.5 py-0.5 border ${
-                          overdue
-                            ? "border-urgent-border bg-urgent-tint text-urgent-ink"
-                            : "border-border bg-surface-2 text-muted"
-                        }`}
-                      >
-                        {formatDue(thread.due_date)}
-                      </span>
-                    )}
+                    <span
+                      className={`font-mono text-[9px] uppercase tracking-[0.08em] px-1.5 py-0.5 border ${
+                        overdue
+                          ? "border-urgent-border bg-urgent-tint text-urgent-ink"
+                          : "border-border bg-surface-2 text-muted"
+                      }`}
+                    >
+                      {formatDue(thread.due_date)}
+                    </span>
                   </div>
                 )}
               </Link>

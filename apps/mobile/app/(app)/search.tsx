@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { View, Text, TextInput, FlatList, Pressable, ActivityIndicator } from "react-native";
 import { router } from "expo-router";
+import { Feather } from "@expo/vector-icons";
 import { useTranslation } from "react-i18next";
 import { trpc } from "@/lib/trpc";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -22,6 +23,15 @@ export default function SearchTab() {
   return (
     <View style={{ flex: 1, backgroundColor: c.surface }}>
       <View style={{ paddingHorizontal: 16, paddingTop: 56, paddingBottom: 14, borderBottomWidth: 1, borderBottomColor: c.border }}>
+        <Pressable
+          onPress={() => { if (router.canGoBack()) router.back(); else router.replace("/(app)"); }}
+          hitSlop={8}
+          accessibilityRole="button"
+          accessibilityLabel={t("common.back")}
+          style={({ pressed }) => ({ opacity: pressed ? 0.5 : 1, marginBottom: 10, alignSelf: "flex-start" })}
+        >
+          <Feather name="chevron-left" size={24} color={c.ink} />
+        </Pressable>
         <Text style={{ fontFamily: "monospace", fontSize: 20, fontWeight: "600", color: c.ink, letterSpacing: -0.3, marginBottom: 12 }}>
           {t("search.title")}
         </Text>

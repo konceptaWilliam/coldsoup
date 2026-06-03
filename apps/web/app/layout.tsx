@@ -17,11 +17,22 @@ const geistMono = localFont({
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
+  viewportFit: "cover",
+  themeColor: "#F2EFE8",
 };
 
 export const metadata: Metadata = {
   title: "coldsoup",
   description: "Radical simplicity for small teams",
+  applicationName: "Coldsoup",
+  appleWebApp: {
+    capable: true,
+    title: "Coldsoup",
+    statusBarStyle: "default",
+  },
+  formatDetection: { telephone: false },
 };
 
 export default function RootLayout({

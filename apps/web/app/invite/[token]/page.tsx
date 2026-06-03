@@ -54,8 +54,15 @@ export default function InvitePage({
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-surface flex items-center justify-center">
-        <p className="font-mono text-sm text-muted">Loading invite...</p>
+      <div className="min-h-screen bg-surface flex items-center justify-center px-4">
+        <div className="w-full max-w-sm">
+          <div className="h-7 w-32 bg-border animate-pulse mb-4" />
+          <div className="border border-border p-6 space-y-3">
+            <div className="h-4 w-40 bg-border animate-pulse" />
+            <div className="h-3 w-56 bg-border/60 animate-pulse" />
+            <div className="h-9 w-full bg-border/60 animate-pulse mt-4" />
+          </div>
+        </div>
       </div>
     );
   }

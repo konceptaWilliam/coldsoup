@@ -555,7 +555,7 @@ export default function ThreadScreen() {
           onPress={() => {
             if (router.canGoBack()) router.back();
             else if (groupId) router.replace({ pathname: "/(app)/group/[groupId]", params: { groupId } });
-            else router.replace("/(app)/(tabs)");
+            else router.replace("/(app)");
           }}
           hitSlop={8}
           accessibilityRole="button"

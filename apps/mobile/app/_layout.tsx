@@ -35,7 +35,7 @@ export default function RootLayout() {
       if (event === "SIGNED_OUT" || !session) {
         router.replace("/(auth)/login");
       } else if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED") {
-        router.replace("/(app)/(tabs)");
+        router.replace("/(app)");
       }
     });
     return () => listener.subscription.unsubscribe();

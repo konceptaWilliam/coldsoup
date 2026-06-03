@@ -62,4 +62,44 @@ export const notificationsRouter = router({
       if (error) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: error.message });
       return { success: true };
     }),
+
+  // Register a browser Web Push subscription for the caller.
+  subscribeWebPush: protectedProcedure
+    .input(
+      z.object({
+        endpoint: z.string().url(),
+        keys: z.object({ p256dh: z.string(), auth: z.string() }),
+        userAgent: z.string().max(500).optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { profile } = ctx;
+      const admin = createAdminClient();
+      const { error } = await admin.from("push_subscriptions").upsert(
+        {
+          user_id: profile.id,
+          endpoint: input.endpoint,
+          p256dh: input.keys.p256dh,
+          auth: input.keys.auth,
+          user_agent: input.userAgent ?? null,
+        },
+        { onConflict: "endpoint" }
+      );
+      if (error) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: error.message });
+      return { success: true };
+    }),
+
+  unsubscribeWebPush: protectedProcedure
+    .input(z.object({ endpoint: z.string().url() }))
+    .mutation(async ({ ctx, input }) => {
+      const { profile } = ctx;
+      const admin = createAdminClient();
+      const { error } = await admin
+        .from("push_subscriptions")
+        .delete()
+        .eq("user_id", profile.id)
+        .eq("endpoint", input.endpoint);
+      if (error) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: error.message });
+      return { success: true };
+    }),
 });

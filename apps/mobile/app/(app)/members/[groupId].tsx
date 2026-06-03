@@ -80,7 +80,7 @@ export default function MembersScreen() {
     onSuccess: () => {
       utils.groups.list.invalidate();
       haptics.warning();
-      router.replace("/(app)/(tabs)");
+      router.replace("/(app)");
     },
     onError: (err) => notifyError(err, t("groupSettings.leaveFailed")),
   });

@@ -268,24 +268,68 @@ export const messagesRouter = router({
           : { data: [] as { user_id: string }[] };
         const mutedUserIds = new Set((muteRows ?? []).map((m) => m.user_id as string));
 
-        const tokens = (members ?? [])
-          .filter((m) => !mutedUserIds.has(m.user_id as string))
-          .map((m) => m.profiles as unknown as { push_token: string | null; notifications_paused: boolean } | null)
-          .filter((p): p is { push_token: string; notifications_paused: boolean } => Boolean(p?.push_token) && !p?.notifications_paused)
+        // Eligible recipients: group members who are not muted and not paused.
+        const eligible = (members ?? []).filter((m) => {
+          if (mutedUserIds.has(m.user_id as string)) return false;
+          const prof = m.profiles as unknown as { notifications_paused: boolean } | null;
+          return !prof?.notifications_paused;
+        });
+        const eligibleUserIds = eligible.map((m) => m.user_id as string);
+
+        const previewBody = input.body.slice(0, 100) || "New message";
+
+        // --- Expo push (mobile app) ---
+        const tokens = eligible
+          .map((m) => m.profiles as unknown as { push_token: string | null } | null)
+          .filter((p): p is { push_token: string } => Boolean(p?.push_token))
           .map((p) => p.push_token);
 
         if (tokens.length > 0) {
           const pushMessages = tokens.map((token) => ({
             to: token,
             title: senderName,
-            body: input.body.slice(0, 100) || "New message",
-            data: { threadId: input.threadId },
+            body: previewBody,
+            data: { threadId: input.threadId, groupId: thread.group_id },
           }));
           fetch("https://exp.host/--/api/v2/push/send", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(pushMessages),
           }).catch(() => null);
+        }
+
+        // --- Web Push (PWA) ---
+        if (eligibleUserIds.length > 0) {
+          void (async () => {
+            try {
+              const { data: subs } = await admin
+                .from("push_subscriptions")
+                .select("endpoint, p256dh, auth")
+                .in("user_id", eligibleUserIds);
+              if (!subs || subs.length === 0) return;
+              const { sendWebPush } = await import("@/lib/web-push");
+              const payload = {
+                title: senderName,
+                body: previewBody,
+                tag: input.threadId,
+                data: { threadId: input.threadId, groupId: thread.group_id },
+              };
+              const results = await Promise.all(
+                subs.map((s) =>
+                  sendWebPush(
+                    { endpoint: s.endpoint as string, p256dh: s.p256dh as string, auth: s.auth as string },
+                    payload
+                  ).then((r) => ({ endpoint: s.endpoint as string, r }))
+                )
+              );
+              const dead = results.filter((x) => x.r === "gone").map((x) => x.endpoint);
+              if (dead.length > 0) {
+                await admin.from("push_subscriptions").delete().in("endpoint", dead);
+              }
+            } catch {
+              // fan-out is best-effort; never block message send
+            }
+          })();
         }
       }
 

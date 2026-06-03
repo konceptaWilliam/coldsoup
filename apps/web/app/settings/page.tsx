@@ -5,6 +5,7 @@ import Link from "next/link";
 import { trpc } from "@/lib/trpc/client";
 import { createClient } from "@/lib/supabase/client";
 import { CreateGroupModal } from "@/components/sidebar";
+import { WebPushToggle } from "@/components/web-push-toggle";
 import { useTheme, type ThemeMode } from "@/lib/theme-context";
 
 const CROP_DISPLAY = 280;
@@ -757,7 +758,9 @@ function NotificationsSection() {
           <div className="h-16 bg-border/40 animate-pulse" />
         ) : (
           <>
-            <div className="flex items-center justify-between gap-4">
+            <WebPushToggle />
+
+            <div className="flex items-center justify-between gap-4 border-t border-border pt-4">
               <div>
                 <p className="text-sm text-ink">Pause all notifications</p>
                 <p className="text-xs text-muted mt-0.5">

@@ -15,7 +15,7 @@ export default function OnboardingScreen() {
     onSuccess: async () => {
       await utils.onboarding.status.invalidate();
       await utils.profile.get.invalidate();
-      router.replace("/(app)/(tabs)");
+      router.replace("/(app)");
     },
   });
 

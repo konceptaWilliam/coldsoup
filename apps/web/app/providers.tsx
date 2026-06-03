@@ -8,6 +8,7 @@ import { trpc } from "@/lib/trpc/client";
 import { createClient } from "@/lib/supabase/client";
 import { PresenceProvider } from "@/lib/presence-context";
 import { ThemeProvider } from "@/lib/theme-context";
+import { PwaManager } from "@/components/pwa-manager";
 
 function getBaseUrl() {
   if (typeof window !== "undefined") return "";
@@ -61,7 +62,10 @@ export function Providers({ children }: { children: React.ReactNode }) {
     <ThemeProvider>
       <PresenceProvider>
         <trpc.Provider client={trpcClient} queryClient={queryClient}>
-          <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+          <QueryClientProvider client={queryClient}>
+            {children}
+            <PwaManager />
+          </QueryClientProvider>
         </trpc.Provider>
       </PresenceProvider>
     </ThemeProvider>

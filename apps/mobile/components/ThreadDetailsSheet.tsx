@@ -77,7 +77,7 @@ export function ThreadDetailsSheet({ visible, threadId, onClose }: Props) {
       onClose();
       if (router.canGoBack()) router.back();
       else if (groupId) router.replace({ pathname: "/(app)/group/[groupId]", params: { groupId } });
-      else router.replace("/(app)/(tabs)");
+      else router.replace("/(app)");
     },
     onError: (err) => {
       const msg = err instanceof Error ? err.message : t("thread.deleteThreadFailed");

@@ -7,8 +7,8 @@ import DateTimePicker from "@react-native-community/datetimepicker";
 import { useTranslation } from "react-i18next";
 import { trpc } from "@/lib/trpc";
 import { StatusBadge } from "@/components/StatusBadge";
-import { Avatar } from "@/components/Avatar";
 import { GroupDrawer } from "@/components/GroupDrawer";
+import { EdgeSwipeArea } from "@/components/EdgeSwipeArea";
 import { ThreadListSkeleton } from "@/components/Skeleton";
 import { useUnread } from "@/lib/unread";
 import { useTheme } from "@/lib/theme";
@@ -235,21 +235,13 @@ export default function GroupScreen() {
                 </Text>
                 <StatusBadge status={item.status} />
               </View>
-              {(item.creator || item.due_date) && (
+              {item.due_date && (
                 <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
-                  {item.creator && (
-                    <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-                      <Avatar name={item.creator.display_name} avatarUrl={item.creator.avatar_url} size={16} fontSize={7} />
-                      <Text style={{ fontFamily: "monospace", fontSize: 10, color: c.muted }}>{item.creator.display_name}</Text>
-                    </View>
-                  )}
-                  {item.due_date && (
-                    <View style={{ borderWidth: 1, borderColor: isOverdue(item.due_date) ? c.urgentBorder : c.border, backgroundColor: isOverdue(item.due_date) ? c.urgentBg : c.surface2, paddingHorizontal: 5, paddingVertical: 1 }}>
-                      <Text style={{ fontFamily: "monospace", fontSize: 9, color: isOverdue(item.due_date) ? c.urgentText : c.muted, letterSpacing: 0.3 }}>
-                        {formatDue(item.due_date)}
-                      </Text>
-                    </View>
-                  )}
+                  <View style={{ borderWidth: 1, borderColor: isOverdue(item.due_date) ? c.urgentBorder : c.border, backgroundColor: isOverdue(item.due_date) ? c.urgentBg : c.surface2, paddingHorizontal: 5, paddingVertical: 1 }}>
+                    <Text style={{ fontFamily: "monospace", fontSize: 9, color: isOverdue(item.due_date) ? c.urgentText : c.muted, letterSpacing: 0.3 }}>
+                      {formatDue(item.due_date)}
+                    </Text>
+                  </View>
                 </View>
               )}
             </Pressable>
@@ -259,6 +251,7 @@ export default function GroupScreen() {
       )}
 
       <GroupDrawer visible={showDrawer} onClose={() => setShowDrawer(false)} currentGroupId={groupId} />
+      <EdgeSwipeArea onOpen={() => setShowDrawer(true)} />
 
       <BottomSheet
         ref={bottomSheetRef}

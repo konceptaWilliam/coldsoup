@@ -31,10 +31,15 @@ export const ALLOWED_EXTENSIONS = new Set(
 export type AttachmentType = "image" | "audio" | "video" | "file";
 
 export function attachmentTypeFor(file: { name: string; type: string }): AttachmentType {
+  // MIME wins over extension — e.g. an audio/webm voice note must not be
+  // mistaken for video just because ".webm" is in VIDEO_EXT.
+  if (file.type.startsWith("image/")) return "image";
+  if (file.type.startsWith("audio/")) return "audio";
+  if (file.type.startsWith("video/")) return "video";
   const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
-  if (file.type.startsWith("image/") || IMAGE_EXT.has(ext)) return "image";
-  if (file.type.startsWith("video/") || VIDEO_EXT.has(ext)) return "video";
-  if (file.type.startsWith("audio/") || AUDIO_EXT.has(ext)) return "audio";
+  if (IMAGE_EXT.has(ext)) return "image";
+  if (AUDIO_EXT.has(ext)) return "audio";
+  if (VIDEO_EXT.has(ext)) return "video";
   return "file";
 }
 

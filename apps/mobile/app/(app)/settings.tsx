@@ -156,7 +156,7 @@ export default function SettingsTab() {
     <ScrollView style={{ flex: 1, backgroundColor: c.surface }}>
       <View style={{ paddingHorizontal: 16, paddingTop: 56, paddingBottom: 14, borderBottomWidth: 1, borderBottomColor: c.border, flexDirection: "row", alignItems: "center", gap: 10 }}>
         <Pressable
-          onPress={() => { if (router.canGoBack()) router.back(); else router.replace("/(app)/(tabs)"); }}
+          onPress={() => { if (router.canGoBack()) router.back(); else router.replace("/(app)"); }}
           hitSlop={8}
           accessibilityRole="button"
           accessibilityLabel={t("common.back")}

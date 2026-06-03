@@ -1128,7 +1128,21 @@ function ThreadDetailsPanel({
 
         <div className="p-4 space-y-6">
           {isLoading ? (
-            <div className="h-28 bg-border/40 animate-pulse" />
+            <div className="space-y-6">
+              <div>
+                <div className="h-2.5 w-16 bg-border animate-pulse mb-2" />
+                <div className="flex items-center gap-2">
+                  <div className="w-7 h-7 bg-border animate-pulse" />
+                  <div className="h-3.5 w-28 bg-border animate-pulse" />
+                </div>
+              </div>
+              <div>
+                <div className="h-2.5 w-16 bg-border animate-pulse mb-2" />
+                <div className="h-9 w-full bg-border/60 animate-pulse" />
+              </div>
+              <div className="h-9 w-full bg-border/60 animate-pulse" />
+              <div className="h-9 w-full bg-border/40 animate-pulse" />
+            </div>
           ) : (
             <>
               <div>
@@ -1389,9 +1403,14 @@ export function ThreadDetail({
   const presenceChannelRef = useRef<RealtimeChannel | null>(null);
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [threadStatus, setThreadStatus] = useState<ThreadStatus>(initialStatus);
-  const [confirmDelete, setConfirmDelete] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordSeconds, setRecordSeconds] = useState(0);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordChunksRef = useRef<Blob[]>([]);
+  const recordTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const recordStreamRef = useRef<MediaStream | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [activeLightbox, setActiveLightbox] = useState<Attachment | null>(null);
@@ -1501,13 +1520,6 @@ export function ThreadDetail({
       ]);
       setShowPollCreate(false);
       utils.messages.list.invalidate({ threadId });
-    },
-  });
-
-  const deleteThread = trpc.threads.delete.useMutation({
-    onSuccess: () => {
-      utils.threads.list.invalidate({ groupId });
-      router.push(`/g/${groupId}`);
     },
   });
 
@@ -2032,6 +2044,59 @@ export function ThreadDetail({
     }
   }
 
+  function pickAudioMime(): { mime: string; ext: string } {
+    const opts: [string, string][] = [
+      ["audio/webm", "webm"],
+      ["audio/mp4", "m4a"],
+      ["audio/ogg", "ogg"],
+    ];
+    for (const [mime, ext] of opts) {
+      if (typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(mime)) {
+        return { mime, ext };
+      }
+    }
+    return { mime: "audio/webm", ext: "webm" };
+  }
+
+  async function startRecording() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      recordStreamRef.current = stream;
+      const { mime, ext } = pickAudioMime();
+      const rec = new MediaRecorder(stream, { mimeType: mime });
+      recordChunksRef.current = [];
+      rec.ondataavailable = (e) => {
+        if (e.data.size > 0) recordChunksRef.current.push(e.data);
+      };
+      rec.onstop = () => {
+        const blob = new Blob(recordChunksRef.current, { type: mime });
+        const file = new File([blob], `voice-${Date.now()}.${ext}`, { type: mime });
+        setPendingFiles((prev) => [...prev, file]);
+        recordStreamRef.current?.getTracks().forEach((t) => t.stop());
+        recordStreamRef.current = null;
+      };
+      mediaRecorderRef.current = rec;
+      rec.start();
+      setIsRecording(true);
+      setRecordSeconds(0);
+      recordTimerRef.current = setInterval(() => setRecordSeconds((s) => s + 1), 1000);
+    } catch {
+      // mic permission denied / unavailable — silently ignore
+    }
+  }
+
+  function stopRecording() {
+    mediaRecorderRef.current?.stop();
+    if (recordTimerRef.current) clearInterval(recordTimerRef.current);
+    recordTimerRef.current = null;
+    setIsRecording(false);
+  }
+
+  function fmtRec(s: number) {
+    const m = Math.floor(s / 60);
+    return `${m}:${(s % 60).toString().padStart(2, "0")}`;
+  }
+
   async function handleSend() {
     if (
       (!body.trim() && pendingFiles.length === 0) ||
@@ -2259,26 +2324,6 @@ export function ThreadDetail({
 
   const members = workspaceMembers ?? [];
 
-  const trashIcon = (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      width="14"
-      height="14"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <polyline points="3 6 5 6 21 6" />
-      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-      <path d="M10 11v6" />
-      <path d="M14 11v6" />
-      <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
-    </svg>
-  );
-
   return (
     <div
       className="flex-1 flex flex-col h-full min-w-0 bg-surface"
@@ -2309,10 +2354,25 @@ export function ThreadDetail({
           </button>
 
           <div className="flex-1 min-w-0">
-            <h1 className="font-mono text-sm font-semibold text-ink truncate lowercase">
-              <span className="text-muted-2 normal-case"># </span>
-              {initialTitle}
-            </h1>
+            <button
+              onClick={() => setShowDetails(true)}
+              title="Thread details"
+              className="flex items-center gap-1.5 min-w-0 max-w-full group"
+            >
+              <h1 className="font-mono text-sm font-semibold text-ink truncate lowercase">
+                <span className="text-muted-2 normal-case"># </span>
+                {initialTitle}
+              </h1>
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="14" height="14" viewBox="0 0 24 24"
+                fill="none" stroke="currentColor" strokeWidth="2"
+                strokeLinecap="round" strokeLinejoin="round"
+                className="text-muted group-hover:text-ink transition-colors flex-shrink-0"
+              >
+                <polyline points="6 9 12 15 18 9" />
+              </svg>
+            </button>
           </div>
 
           <div className="hidden md:flex items-center gap-3 flex-shrink-0">
@@ -2321,90 +2381,16 @@ export function ThreadDetail({
               currentStatus={threadStatus}
               threadTitle={initialTitle}
             />
-            <button
-              onClick={() => setShowDetails(true)}
-              className="font-mono text-[10px] uppercase tracking-wider px-2 py-1 text-muted hover:text-ink border border-border hover:border-border-strong transition-colors"
-            >
-              details
-            </button>
-            {confirmDelete ? (
-              <div className="flex items-center gap-2">
-                <span className="font-mono text-[10px] text-red-600 uppercase tracking-wider">
-                  Delete?
-                </span>
-                <button
-                  onClick={() => deleteThread.mutate({ threadId })}
-                  disabled={deleteThread.isPending}
-                  className="font-mono text-[10px] uppercase tracking-wider px-2 py-1 bg-red-600 text-white disabled:opacity-40"
-                >
-                  {deleteThread.isPending ? "..." : "Confirm"}
-                </button>
-                <button
-                  onClick={() => setConfirmDelete(false)}
-                  className="font-mono text-[10px] uppercase tracking-wider px-2 py-1 text-muted hover:text-ink transition-colors"
-                >
-                  Cancel
-                </button>
-              </div>
-            ) : (
-              <button
-                onClick={() => setConfirmDelete(true)}
-                title="Delete thread"
-                className="text-muted hover:text-red-600 transition-colors"
-              >
-                {trashIcon}
-              </button>
-            )}
           </div>
-
-          {confirmDelete ? (
-            <div className="md:hidden flex items-center gap-1.5 flex-shrink-0">
-              <span className="font-mono text-[10px] text-red-600 uppercase">
-                delete?
-              </span>
-              <button
-                onClick={() => deleteThread.mutate({ threadId })}
-                disabled={deleteThread.isPending}
-                className="font-mono text-[10px] uppercase px-2 py-1 bg-red-600 text-white disabled:opacity-40"
-              >
-                {deleteThread.isPending ? "..." : "yes"}
-              </button>
-              <button
-                onClick={() => setConfirmDelete(false)}
-                className="font-mono text-[10px] uppercase px-2 py-1 text-muted"
-              >
-                no
-              </button>
-            </div>
-          ) : (
-            <div className="md:hidden flex h-full flex-shrink-0">
-              <button
-                onClick={() => setShowDetails(true)}
-                title="Thread details"
-                className="w-11 h-full flex items-center justify-center text-muted hover:text-ink transition-colors"
-              >
-                i
-              </button>
-              <button
-                onClick={() => setConfirmDelete(true)}
-                title="Delete thread"
-                className="w-11 h-full flex items-center justify-center text-muted hover:text-red-600 transition-colors"
-              >
-                {trashIcon}
-              </button>
-            </div>
-          )}
         </div>
 
-        {!confirmDelete && (
-          <div className="md:hidden px-3 pb-2">
-            <StatusControl
-              threadId={threadId}
-              currentStatus={threadStatus}
-              threadTitle={initialTitle}
-            />
-          </div>
-        )}
+        <div className="md:hidden px-3 pb-2">
+          <StatusControl
+            threadId={threadId}
+            currentStatus={threadStatus}
+            threadTitle={initialTitle}
+          />
+        </div>
       </header>
 
       {/* Messages */}
@@ -2800,33 +2786,18 @@ export function ThreadDetail({
                                     </div>
                                   )}
                                   {audioAtts.length > 0 && (
-                                    <div className="flex flex-wrap gap-2">
+                                    <div className="flex flex-col gap-2">
                                       {audioAtts.map((att, i) => (
-                                        <button
+                                        <div
                                           key={i}
-                                          onClick={() => setActiveLightbox(att)}
-                                          className="flex items-center gap-2 border border-border px-3 py-2 hover:border-pastel-deep transition-colors"
+                                          className="border border-border bg-surface-2 px-2.5 py-2 max-w-xs"
                                         >
-                                          <svg
-                                            xmlns="http://www.w3.org/2000/svg"
-                                            width="12"
-                                            height="12"
-                                            viewBox="0 0 24 24"
-                                            fill="none"
-                                            stroke="currentColor"
-                                            strokeWidth="2"
-                                            strokeLinecap="round"
-                                            strokeLinejoin="round"
-                                            className="text-muted flex-shrink-0"
-                                          >
-                                            <path d="M9 18V5l12-2v13" />
-                                            <circle cx="6" cy="18" r="3" />
-                                            <circle cx="18" cy="16" r="3" />
-                                          </svg>
-                                          <span className="font-mono text-xs text-ink max-w-[160px] truncate">
+                                          <span className="font-mono text-[10px] text-muted block mb-1 truncate">
                                             {att.name}
                                           </span>
-                                        </button>
+                                          {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+                                          <audio controls src={att.url} className="w-full h-8" />
+                                        </div>
                                       ))}
                                     </div>
                                   )}
@@ -3169,6 +3140,34 @@ export function ThreadDetail({
                 </>
               )}
             </div>
+            {/* Voice record */}
+            <button
+              type="button"
+              onClick={isRecording ? stopRecording : startRecording}
+              title={isRecording ? "Stop recording" : "Record voice message"}
+              className={`h-11 md:h-10 flex items-center justify-center flex-shrink-0 transition-colors ${
+                isRecording ? "px-2.5 text-red-600" : "w-11 md:w-10 text-muted hover:text-pastel-ink"
+              }`}
+            >
+              {isRecording ? (
+                <span className="flex items-center gap-1.5 font-mono text-[11px]">
+                  <span className="w-2.5 h-2.5 bg-red-600 inline-block" />
+                  {fmtRec(recordSeconds)}
+                </span>
+              ) : (
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="16" height="16" viewBox="0 0 24 24"
+                  fill="none" stroke="currentColor" strokeWidth="2"
+                  strokeLinecap="round" strokeLinejoin="round"
+                >
+                  <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+                  <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                  <line x1="12" y1="19" x2="12" y2="23" />
+                  <line x1="8" y1="23" x2="16" y2="23" />
+                </svg>
+              )}
+            </button>
             <textarea
               ref={textareaRef}
               value={body}

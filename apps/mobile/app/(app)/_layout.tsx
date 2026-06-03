@@ -45,9 +45,11 @@ export default function AppLayout() {
       <PresenceProvider>
       <AppLockProvider>
       <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: c.surface } }}>
-        <Stack.Screen name="(tabs)" />
+        <Stack.Screen name="index" />
+        <Stack.Screen name="search" options={{ headerShown: false }} />
+        <Stack.Screen name="settings" options={{ headerShown: false }} />
         <Stack.Screen name="onboarding" options={{ headerShown: false }} />
-        <Stack.Screen name="group/[groupId]" options={{ headerShown: false }} />
+        <Stack.Screen name="group/[groupId]" options={{ headerShown: false, gestureEnabled: false }} />
         <Stack.Screen name="members/[groupId]" options={{ headerShown: true, title: "", ...headerBase }} />
         <Stack.Screen name="thread/[threadId]" options={{ headerShown: false }} />
       </Stack>
