@@ -1728,7 +1728,6 @@ export function ThreadDetail({
           event: "INSERT",
           schema: "public",
           table: "messages",
-          filter: `thread_id=eq.${threadId}`,
         },
         async (payload) => {
           const newMsg = payload.new as {
@@ -1743,6 +1742,10 @@ export function ThreadDetail({
             reply_to_id: string | null;
             poll_id: string | null;
           };
+
+          // Server-side postgres_changes filters silently drop events here,
+          // so subscribe table-wide and filter by thread client-side.
+          if (newMsg.thread_id !== threadId) return;
 
           const { data: profile } = await supabase
             .from("profiles")
@@ -1773,7 +1776,6 @@ export function ThreadDetail({
           event: "UPDATE",
           schema: "public",
           table: "messages",
-          filter: `thread_id=eq.${threadId}`,
         },
         (payload) => {
           const updated = payload.new as {
@@ -1781,7 +1783,9 @@ export function ThreadDetail({
             body: string;
             edited_at: string | null;
             is_deleted: boolean;
+            thread_id: string;
           };
+          if (updated.thread_id !== threadId) return;
           setMessages((prev) =>
             prev.map((m) =>
               m.id === updated.id
@@ -1802,9 +1806,10 @@ export function ThreadDetail({
           event: "*",
           schema: "public",
           table: "thread_reads",
-          filter: `thread_id=eq.${threadId}`,
         },
-        () => {
+        (payload) => {
+          const row = (payload.new ?? payload.old) as { thread_id?: string } | null;
+          if (row?.thread_id !== threadId) return;
           utils.threads.reads.invalidate({ threadId });
         },
       )
