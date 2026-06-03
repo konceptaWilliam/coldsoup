@@ -77,6 +77,16 @@ body,
 }
 
 /* Dynamic viewport height — shrinks when mobile keyboard opens */
+@media (pointer: coarse) and (max-width: 768px) {
+  html,
+  body,
+  body * {
+    -webkit-touch-callout: none !important;
+    -webkit-user-select: none !important;
+    user-select: none !important;
+  }
+}
+
 .h-screen-dynamic {
   height: 100vh;
   height: 100dvh;

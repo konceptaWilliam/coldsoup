@@ -3190,6 +3190,53 @@ export function ThreadDetail({
               </button>
             </div>
 
+            <div className="mb-3 border border-border bg-surface-2 p-3">
+              {activeMessageMenu.poll && (
+                <div className="mb-2 border-l-2 border-pastel-deep pl-2">
+                  <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted">
+                    poll
+                  </span>
+                  <p className="mt-0.5 text-[13px] leading-snug text-ink">
+                    {activeMessageMenu.poll.question}
+                  </p>
+                </div>
+              )}
+
+              {activeMessageMenu.body.trim().length > 0 && (
+                <p className="max-h-28 overflow-y-auto whitespace-pre-wrap break-words text-[13px] leading-[1.45] text-ink">
+                  {activeMessageMenu.body}
+                </p>
+              )}
+
+              {(activeMessageMenu.attachments ?? []).length > 0 && (
+                <div
+                  className={
+                    activeMessageMenu.body.trim().length > 0 ||
+                    activeMessageMenu.poll
+                      ? "mt-2 flex flex-wrap gap-1.5"
+                      : "flex flex-wrap gap-1.5"
+                  }
+                >
+                  {activeMessageMenu.attachments.map((attachment, index) => (
+                    <span
+                      key={`${attachment.url}-${index}`}
+                      className="max-w-full truncate border border-border bg-surface px-2 py-1 font-mono text-[10px] text-muted"
+                    >
+                      {attachment.type}: {attachment.name}
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {!activeMessageMenu.poll &&
+                !activeMessageMenu.body.trim() &&
+                (activeMessageMenu.attachments ?? []).length === 0 && (
+                  <p className="font-mono text-[11px] text-muted">
+                    empty message
+                  </p>
+                )}
+            </div>
+
             <div className="grid grid-cols-3 gap-2">
               {REACTION_DEFAULTS.map((reaction) => (
                 <button
