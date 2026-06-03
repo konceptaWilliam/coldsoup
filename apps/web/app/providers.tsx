@@ -21,7 +21,16 @@ const supabase = createClient();
 
 export function Providers({ children }: { children: React.ReactNode }) {
   useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(() => {});
+    // Keep the realtime socket's auth token in sync with the session so
+    // postgres_changes RLS evaluates as the logged-in user (not anon).
+    supabase.auth.getSession().then(({ data }) => {
+      if (data.session) supabase.realtime.setAuth(data.session.access_token);
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      (_event, session) => {
+        supabase.realtime.setAuth(session?.access_token ?? null);
+      }
+    );
     return () => subscription.unsubscribe();
   }, []);
 
