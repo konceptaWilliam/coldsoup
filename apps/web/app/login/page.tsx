@@ -40,10 +40,11 @@ export default function LoginPage() {
   async function handleOAuth(provider: "google" | "apple") {
     setError(null);
     const supabase = createClient();
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? window.location.origin;
+    // Always use the current origin so dev (localhost) and prod (domain) each
+    // redirect to themselves — both must be in Supabase's redirect allow-list.
     const { error } = await supabase.auth.signInWithOAuth({
       provider,
-      options: { redirectTo: `${appUrl}/auth/callback` },
+      options: { redirectTo: `${window.location.origin}/auth/callback` },
     });
     if (error) setError(error.message);
   }
@@ -54,10 +55,9 @@ export default function LoginPage() {
     setForgotError(null);
 
     const supabase = createClient();
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? window.location.origin;
 
     const { error } = await supabase.auth.resetPasswordForEmail(forgotEmail, {
-      redirectTo: `${appUrl}/auth/callback?recovery=1`,
+      redirectTo: `${window.location.origin}/auth/callback?recovery=1`,
     });
 
     if (error) {
