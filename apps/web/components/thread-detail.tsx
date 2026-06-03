@@ -5,7 +5,7 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import { trpc } from "@/lib/trpc/client";
-import { createClient } from "@/lib/supabase/client";
+import { createClient, setRealtimeAuth } from "@/lib/supabase/client";
 import { useUnread } from "@/lib/unread-context";
 import { useOnline } from "@/lib/presence-context";
 import { validateFile, resizeImageIfNeeded, attachmentTypeFor } from "@/lib/file-utils";
@@ -1679,26 +1679,33 @@ export function ThreadDetail({
       config: { presence: { key: myInfo.id } },
     });
 
+    // Recompute the typing list from the full presence state. Bound to
+    // sync/join/leave because the `sync` event alone does not reliably fire on
+    // an already-joined client when a remote peer joins or updates its meta.
+    const recompute = () => {
+      const state = channel.presenceState<{
+        display_name: string;
+        typing: boolean;
+      }>();
+      const names = Object.entries(state)
+        .filter(
+          ([uid, presences]) =>
+            uid !== myInfo.id &&
+            (presences as { display_name: string; typing: boolean }[])[0]
+              ?.typing,
+        )
+        .map(
+          ([, presences]) =>
+            (presences as { display_name: string; typing: boolean }[])[0]
+              .display_name,
+        );
+      setTypingUsers(names);
+    };
+
     channel
-      .on("presence", { event: "sync" }, () => {
-        const state = channel.presenceState<{
-          display_name: string;
-          typing: boolean;
-        }>();
-        const names = Object.entries(state)
-          .filter(
-            ([uid, presences]) =>
-              uid !== myInfo.id &&
-              (presences as { display_name: string; typing: boolean }[])[0]
-                ?.typing,
-          )
-          .map(
-            ([, presences]) =>
-              (presences as { display_name: string; typing: boolean }[])[0]
-                .display_name,
-          );
-        setTypingUsers(names);
-      })
+      .on("presence", { event: "sync" }, recompute)
+      .on("presence", { event: "join" }, recompute)
+      .on("presence", { event: "leave" }, recompute)
       .subscribe(async (status) => {
         if (status === "SUBSCRIBED") {
           await channel.track({
@@ -1719,8 +1726,19 @@ export function ThreadDetail({
   // Realtime: new messages + edits
   useEffect(() => {
     const supabase = createClient();
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+    let cancelled = false;
 
-    const channel = supabase
+    (async () => {
+      // Ensure the realtime socket carries the user JWT BEFORE the channel
+      // joins, otherwise postgres_changes joins as anon and RLS filters every
+      // event (channel still reports SUBSCRIBED, just delivers nothing).
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      if (token) setRealtimeAuth(supabase, token);
+      if (cancelled) return;
+
+    channel = supabase
       .channel(`messages:thread:${threadId}`)
       .on(
         "postgres_changes",
@@ -1814,9 +1832,11 @@ export function ThreadDetail({
         },
       )
       .subscribe();
+    })();
 
     return () => {
-      supabase.removeChannel(channel);
+      cancelled = true;
+      if (channel) supabase.removeChannel(channel);
     };
   }, [threadId, utils.threads.reads]);
 

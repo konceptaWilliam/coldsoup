@@ -15,3 +15,14 @@ export function createClient() {
   );
   return browserClient;
 }
+
+// Idempotent realtime auth. Calling realtime.setAuth() unconditionally
+// re-pushes the token and forces every channel to rejoin, which resets
+// presence state (typing indicator) and duplicates tracks. Only update when
+// the token actually changed.
+export function setRealtimeAuth(client: SupabaseClient, token: string | null) {
+  const current = (client.realtime as unknown as { accessTokenValue?: string | null })
+    .accessTokenValue;
+  if (current === token) return;
+  client.realtime.setAuth(token);
+}

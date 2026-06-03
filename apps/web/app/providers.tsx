@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { httpBatchLink, loggerLink } from "@trpc/client";
 import superjson from "superjson";
 import { trpc } from "@/lib/trpc/client";
-import { createClient } from "@/lib/supabase/client";
+import { createClient, setRealtimeAuth } from "@/lib/supabase/client";
 import { PresenceProvider } from "@/lib/presence-context";
 import { ThemeProvider } from "@/lib/theme-context";
 import { PwaManager } from "@/components/pwa-manager";
@@ -24,11 +24,11 @@ export function Providers({ children }: { children: React.ReactNode }) {
     // Keep the realtime socket's auth token in sync with the session so
     // postgres_changes RLS evaluates as the logged-in user (not anon).
     supabase.auth.getSession().then(({ data }) => {
-      if (data.session) supabase.realtime.setAuth(data.session.access_token);
+      if (data.session) setRealtimeAuth(supabase, data.session.access_token);
     });
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (_event, session) => {
-        supabase.realtime.setAuth(session?.access_token ?? null);
+        setRealtimeAuth(supabase, session?.access_token ?? null);
       }
     );
     return () => subscription.unsubscribe();
