@@ -251,6 +251,7 @@ export const messagesRouter = router({
       // Send push notifications to other group members, skipping anyone who has
       // paused notifications or muted this thread or its group.
       const senderName = (data?.profiles as unknown as { display_name: string } | null)?.display_name ?? "Someone";
+      let pushDebug: unknown = { reached: false };
       if (thread) {
         const { data: members } = await admin
           .from("group_memberships")
@@ -302,40 +303,38 @@ export const messagesRouter = router({
         // --- Web Push (PWA) ---
         // Awaited (not fire-and-forget): on Vercel, async work after the
         // response returns can be terminated, dropping the push.
-        if (eligibleUserIds.length > 0) {
-          try {
-            const { data: subs } = await admin
-              .from("push_subscriptions")
-              .select("endpoint, p256dh, auth")
-              .in("user_id", eligibleUserIds);
-            console.log("[webpush] eligible users", eligibleUserIds.length, "subs", subs?.length ?? 0);
-            if (subs && subs.length > 0) {
-              const { sendWebPush } = await import("@/lib/web-push");
-              const payload = {
-                title: senderName,
-                body: previewBody,
-                // Unique per message — a per-thread tag makes iOS silently
-                // coalesce/replace without alerting on subsequent messages.
-                tag: data?.id ?? input.threadId,
-                data: { threadId: input.threadId, groupId: thread.group_id },
-              };
-              const results = await Promise.all(
-                subs.map((s) =>
-                  sendWebPush(
-                    { endpoint: s.endpoint as string, p256dh: s.p256dh as string, auth: s.auth as string },
-                    payload
-                  ).then((r) => ({ endpoint: s.endpoint as string, r }))
-                )
-              );
-              console.log("[webpush] results", JSON.stringify(results.map((x) => x.r)));
-              const dead = results.filter((x) => x.r === "gone").map((x) => x.endpoint);
-              if (dead.length > 0) {
-                await admin.from("push_subscriptions").delete().in("endpoint", dead);
-              }
-            }
-          } catch (err) {
-            console.error("[webpush] fan-out error", err);
+        try {
+          const { data: subs } = eligibleUserIds.length > 0
+            ? await admin
+                .from("push_subscriptions")
+                .select("endpoint, p256dh, auth")
+                .in("user_id", eligibleUserIds)
+            : { data: [] as { endpoint: string; p256dh: string; auth: string }[] };
+          const { sendWebPushDebug } = await import("@/lib/web-push");
+          const payload = {
+            title: senderName,
+            body: previewBody,
+            tag: data?.id ?? input.threadId,
+            data: { threadId: input.threadId, groupId: thread.group_id },
+          };
+          const results = await Promise.all(
+            (subs ?? []).map((s) =>
+              sendWebPushDebug(
+                { endpoint: s.endpoint as string, p256dh: s.p256dh as string, auth: s.auth as string },
+                payload
+              ).then((r) => ({ host: new URL(s.endpoint as string).host, ...r }))
+            )
+          );
+          pushDebug = { reached: true, eligible: eligibleUserIds.length, subs: (subs ?? []).length, results };
+          const dead = results
+            .filter((x) => x.statusCode === 404 || x.statusCode === 410)
+            .map((_, i) => (subs ?? [])[i]?.endpoint)
+            .filter(Boolean) as string[];
+          if (dead.length > 0) {
+            await admin.from("push_subscriptions").delete().in("endpoint", dead);
           }
+        } catch (err) {
+          pushDebug = { reached: true, error: (err as Error).message };
         }
       }
 
@@ -344,6 +343,7 @@ export const messagesRouter = router({
         reply_to,
         poll: null,
         reactions: REACTION_TYPES.map((type) => ({ type, count: 0, userReacted: false, users: [] })),
+        _pushDebug: pushDebug,
       };
     }),
 
