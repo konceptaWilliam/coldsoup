@@ -1840,7 +1840,9 @@ export function ThreadDetail({
         return prev;
       });
       if (pollIds.length === 0) return;
-      const map = await utils.polls.getMany.fetch({ pollIds });
+      // Bypass the query cache — staleTime would otherwise return the poll's
+      // previous (pre-vote) data and the merge would be a no-op.
+      const map = await utils.polls.getMany.fetch({ pollIds }, { staleTime: 0 });
       setMessages((prev) =>
         prev.map((m) =>
           m.poll_id && map[m.poll_id] ? { ...m, poll: map[m.poll_id] } : m,
@@ -1885,7 +1887,10 @@ export function ThreadDetail({
           // poll renders live instead of appearing blank until refresh.
           let poll = null;
           if (newMsg.poll_id) {
-            const map = await utils.polls.getMany.fetch({ pollIds: [newMsg.poll_id] });
+            const map = await utils.polls.getMany.fetch(
+              { pollIds: [newMsg.poll_id] },
+              { staleTime: 0 },
+            );
             poll = map[newMsg.poll_id] ?? null;
           }
 
