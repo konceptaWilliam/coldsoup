@@ -26,7 +26,20 @@ self.addEventListener("push", (event) => {
     data: payload.data || {},
   };
 
-  event.waitUntil(self.registration.showNotification(title, options));
+  event.waitUntil(
+    (async () => {
+      await self.registration.showNotification(title, options);
+      // App-icon badge = number of undismissed notifications.
+      if (self.navigator.setAppBadge) {
+        try {
+          const notes = await self.registration.getNotifications();
+          await self.navigator.setAppBadge(notes.length);
+        } catch (e) {
+          // Badging unsupported / failed — ignore.
+        }
+      }
+    })()
+  );
 });
 
 self.addEventListener("notificationclick", (event) => {
@@ -38,7 +51,15 @@ self.addEventListener("notificationclick", (event) => {
   else if (threadId) url = `/?thread=${threadId}`;
 
   event.waitUntil(
-    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientList) => {
+    (async () => {
+      if (self.navigator.clearAppBadge) {
+        try {
+          await self.navigator.clearAppBadge();
+        } catch (e) {
+          /* ignore */
+        }
+      }
+      const clientList = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
       for (const client of clientList) {
         if ("focus" in client) {
           client.navigate(url);
@@ -46,6 +67,6 @@ self.addEventListener("notificationclick", (event) => {
         }
       }
       if (self.clients.openWindow) return self.clients.openWindow(url);
-    })
+    })()
   );
 });
