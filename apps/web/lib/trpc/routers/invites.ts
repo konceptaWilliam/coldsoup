@@ -95,28 +95,35 @@ export const invitesRouter = router({
         `&type=${encodeURIComponent(link.verificationType)}&inviteToken=${token}`;
 
       const resend = new Resend(process.env.RESEND_API_KEY);
-      try {
-        await resend.emails.send({
-          from: "coldsoup <onboarding@resend.dev>",
-          to: input.email,
-          subject: `welcome to coldsoup`,
-          html: `
-            <div style="font-family: system-ui, sans-serif; max-width: 480px; margin: 0 auto; padding: 40px 24px; color: #1A1A18;">
-              <h1 style="font-size: 20px; font-weight: 600; margin-bottom: 8px;">You're invited</h1>
-              <p style="color: #6B6A65; margin-bottom: 24px;">
-                ${profile.display_name} has invited you to join <strong>coldsoup</strong>.
-              </p>
-              <a href="${inviteUrl}" style="display: inline-block; background: #1A1A18; color: #F7F6F2; padding: 12px 24px; text-decoration: none; font-size: 14px; font-weight: 500;">
-                Accept &amp; join
-              </a>
-              <p style="margin-top: 24px; font-size: 12px; color: #6B6A65;">
-                This link signs you in and adds you to the group. It expires in 7 days.
-              </p>
-            </div>
-          `,
+      // onboarding@resend.dev (Resend's test sender) only delivers to your own
+      // Resend account email — set RESEND_FROM to a verified-domain sender in
+      // production so invites reach anyone.
+      const from = process.env.RESEND_FROM ?? "coldsoup <onboarding@resend.dev>";
+      const { error: emailError } = await resend.emails.send({
+        from,
+        to: input.email,
+        subject: `welcome to coldsoup`,
+        html: `
+          <div style="font-family: system-ui, sans-serif; max-width: 480px; margin: 0 auto; padding: 40px 24px; color: #1A1A18;">
+            <h1 style="font-size: 20px; font-weight: 600; margin-bottom: 8px;">You're invited</h1>
+            <p style="color: #6B6A65; margin-bottom: 24px;">
+              ${profile.display_name} has invited you to join <strong>coldsoup</strong>.
+            </p>
+            <a href="${inviteUrl}" style="display: inline-block; background: #1A1A18; color: #F7F6F2; padding: 12px 24px; text-decoration: none; font-size: 14px; font-weight: 500;">
+              Accept &amp; join
+            </a>
+            <p style="margin-top: 24px; font-size: 12px; color: #6B6A65;">
+              This link signs you in and adds you to the group. It expires in 7 days.
+            </p>
+          </div>
+        `,
+      });
+
+      if (emailError) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: `Invite created but email failed: ${emailError.message}`,
         });
-      } catch {
-        // Email failure is non-fatal — invite was created
       }
 
       return { ...invite, inviteUrl };
