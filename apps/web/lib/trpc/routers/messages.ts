@@ -299,14 +299,16 @@ export const messagesRouter = router({
         }
 
         // --- Web Push (PWA) ---
+        // Awaited (not fire-and-forget): on Vercel, async work after the
+        // response returns can be terminated, dropping the push.
         if (eligibleUserIds.length > 0) {
-          void (async () => {
-            try {
-              const { data: subs } = await admin
-                .from("push_subscriptions")
-                .select("endpoint, p256dh, auth")
-                .in("user_id", eligibleUserIds);
-              if (!subs || subs.length === 0) return;
+          try {
+            const { data: subs } = await admin
+              .from("push_subscriptions")
+              .select("endpoint, p256dh, auth")
+              .in("user_id", eligibleUserIds);
+            console.log("[webpush] eligible users", eligibleUserIds.length, "subs", subs?.length ?? 0);
+            if (subs && subs.length > 0) {
               const { sendWebPush } = await import("@/lib/web-push");
               const payload = {
                 title: senderName,
@@ -322,14 +324,15 @@ export const messagesRouter = router({
                   ).then((r) => ({ endpoint: s.endpoint as string, r }))
                 )
               );
+              console.log("[webpush] results", JSON.stringify(results.map((x) => x.r)));
               const dead = results.filter((x) => x.r === "gone").map((x) => x.endpoint);
               if (dead.length > 0) {
                 await admin.from("push_subscriptions").delete().in("endpoint", dead);
               }
-            } catch {
-              // fan-out is best-effort; never block message send
             }
-          })();
+          } catch (err) {
+            console.error("[webpush] fan-out error", err);
+          }
         }
       }
 
