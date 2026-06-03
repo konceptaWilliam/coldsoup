@@ -44,9 +44,8 @@ export async function sendWebPush(
     );
     return "ok";
   } catch (err: unknown) {
-    const e = err as { statusCode?: number; body?: string; message?: string };
-    console.error("[webpush] send failed", e?.statusCode, e?.body ?? e?.message);
-    if (e?.statusCode === 404 || e?.statusCode === 410) return "gone";
+    const status = (err as { statusCode?: number })?.statusCode;
+    if (status === 404 || status === 410) return "gone";
     return "error";
   }
 }
