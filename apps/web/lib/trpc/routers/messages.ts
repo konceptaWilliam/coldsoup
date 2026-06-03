@@ -314,7 +314,9 @@ export const messagesRouter = router({
               const payload = {
                 title: senderName,
                 body: previewBody,
-                tag: input.threadId,
+                // Unique per message — a per-thread tag makes iOS silently
+                // coalesce/replace without alerting on subsequent messages.
+                tag: data?.id ?? input.threadId,
                 data: { threadId: input.threadId, groupId: thread.group_id },
               };
               const results = await Promise.all(
