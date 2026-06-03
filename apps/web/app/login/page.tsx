@@ -74,7 +74,7 @@ export default function LoginPage() {
         <div className="w-full max-w-sm">
           <div className="mb-10">
             <h1 className="font-mono text-2xl font-semibold text-ink tracking-tight">
-              kallchatt
+              coldsoup
             </h1>
             <p className="text-sm text-muted mt-1">Reset your password</p>
           </div>
@@ -149,7 +149,7 @@ export default function LoginPage() {
       <div className="w-full max-w-sm">
         <div className="mb-10">
           <h1 className="font-mono text-2xl font-semibold text-ink tracking-tight">
-            kallchatt
+            coldsoup
           </h1>
         </div>
 

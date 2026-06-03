@@ -1,10 +1,13 @@
 import { NextResponse } from "next/server";
+import type { EmailOtpType } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 export async function GET(request: Request) {
   const { searchParams, origin } = new URL(request.url);
   const code = searchParams.get("code");
+  const tokenHash = searchParams.get("token_hash");
+  const otpType = searchParams.get("type");
   const inviteToken = searchParams.get("inviteToken");
   const isRecovery = searchParams.get("recovery") === "1";
 
@@ -13,6 +16,9 @@ export async function GET(request: Request) {
   // Exchange code for session (may fail if already signed in — that's fine)
   if (code) {
     await supabase.auth.exchangeCodeForSession(code);
+  } else if (tokenHash && otpType) {
+    // Server-generated magic/invite link (single-email invite flow).
+    await supabase.auth.verifyOtp({ type: otpType as EmailOtpType, token_hash: tokenHash });
   }
 
   const {

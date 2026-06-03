@@ -72,7 +72,7 @@ export default function InvitePage({
       <div className="min-h-screen bg-surface flex items-center justify-center px-4">
         <div className="w-full max-w-sm">
           <h1 className="font-mono text-2xl font-semibold text-ink mb-4">
-            kallchatt
+            coldsoup
           </h1>
           <div className="border border-border p-6">
             <p className="font-mono text-sm font-medium text-ink mb-1">
@@ -96,7 +96,7 @@ export default function InvitePage({
       <div className="min-h-screen bg-surface flex items-center justify-center px-4">
         <div className="w-full max-w-sm">
           <h1 className="font-mono text-2xl font-semibold text-ink mb-8">
-            kallchatt
+            coldsoup
           </h1>
           <div className="border border-border p-6">
             <p className="font-mono text-sm font-medium text-ink mb-1">
@@ -104,7 +104,7 @@ export default function InvitePage({
             </p>
             <p className="text-sm text-muted">
               We sent a magic link to <strong>{invite.email}</strong>. Click it
-              to join <strong>Kallchatt</strong>.
+              to join <strong>coldsoup</strong>.
             </p>
           </div>
         </div>
@@ -117,7 +117,7 @@ export default function InvitePage({
       <div className="w-full max-w-sm">
         <div className="mb-10">
           <h1 className="font-mono text-2xl font-semibold text-ink tracking-tight">
-            kallchatt
+            coldsoup
           </h1>
         </div>
 
@@ -129,7 +129,7 @@ export default function InvitePage({
             <strong>{inviterName}</strong> has invited you to join
           </p>
           <p className="font-mono text-lg font-semibold text-ink">
-            Kallchatt
+            coldsoup
           </p>
         </div>
 

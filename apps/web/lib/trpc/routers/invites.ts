@@ -5,6 +5,22 @@ import { randomBytes } from "crypto";
 import { router, protectedProcedure, publicProcedure } from "../trpc";
 import { createAdminClient } from "@/lib/supabase/admin";
 
+// Whether an auth user already exists for this email (paginated scan; fine for
+// small workspaces). Determines magiclink vs invite link type.
+async function emailHasAccount(
+  admin: ReturnType<typeof createAdminClient>,
+  email: string
+): Promise<boolean> {
+  const target = email.toLowerCase();
+  for (let page = 1; page <= 20; page++) {
+    const { data, error } = await admin.auth.admin.listUsers({ page, perPage: 200 });
+    if (error || !data?.users?.length) return false;
+    if (data.users.some((u) => u.email?.toLowerCase() === target)) return true;
+    if (data.users.length < 200) return false;
+  }
+  return false;
+}
+
 async function assertGroupAdmin(groupId: string, userId: string) {
   const admin = createAdminClient();
   const { data } = await admin
@@ -46,26 +62,55 @@ export const invitesRouter = router({
         throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: error.message });
       }
 
-      const resend = new Resend(process.env.RESEND_API_KEY);
       const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
-      const inviteUrl = `${appUrl}/invite/${token}`;
 
+      // Single-email flow: generate a magic link (existing user) or invite link
+      // (new user) and embed it in our branded email. Clicking it authenticates
+      // AND lands on /auth/callback, which accepts the invite by token. No second
+      // Supabase email.
+      const existing = await emailHasAccount(admin, input.email);
+
+      const buildLink = async (type: "magiclink" | "invite") => {
+        const { data, error: linkErr } = await admin.auth.admin.generateLink({
+          type,
+          email: input.email,
+        });
+        if (linkErr || !data?.properties) return null;
+        return {
+          hashedToken: data.properties.hashed_token,
+          verificationType: data.properties.verification_type,
+        };
+      };
+
+      // Use magiclink for existing users, invite for new. Fall back to the other
+      // type if the first errors (e.g. a stale existence check).
+      let link = await buildLink(existing ? "magiclink" : "invite");
+      if (!link) link = await buildLink(existing ? "invite" : "magiclink");
+      if (!link) {
+        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Could not generate invite link" });
+      }
+
+      const inviteUrl =
+        `${appUrl}/auth/callback?token_hash=${encodeURIComponent(link.hashedToken)}` +
+        `&type=${encodeURIComponent(link.verificationType)}&inviteToken=${token}`;
+
+      const resend = new Resend(process.env.RESEND_API_KEY);
       try {
         await resend.emails.send({
-          from: "Kallchatt <onboarding@resend.dev>",
+          from: "coldsoup <onboarding@resend.dev>",
           to: input.email,
-          subject: `You've been invited to Kallchatt`,
+          subject: `welcome to coldsoup`,
           html: `
             <div style="font-family: system-ui, sans-serif; max-width: 480px; margin: 0 auto; padding: 40px 24px; color: #1A1A18;">
               <h1 style="font-size: 20px; font-weight: 600; margin-bottom: 8px;">You're invited</h1>
               <p style="color: #6B6A65; margin-bottom: 24px;">
-                ${profile.display_name} has invited you to join <strong>Kallchatt</strong>.
+                ${profile.display_name} has invited you to join <strong>coldsoup</strong>.
               </p>
               <a href="${inviteUrl}" style="display: inline-block; background: #1A1A18; color: #F7F6F2; padding: 12px 24px; text-decoration: none; font-size: 14px; font-weight: 500;">
                 Accept &amp; join
               </a>
               <p style="margin-top: 24px; font-size: 12px; color: #6B6A65;">
-                Or copy this link: ${inviteUrl}
+                This link signs you in and adds you to the group. It expires in 7 days.
               </p>
             </div>
           `,

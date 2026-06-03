@@ -1894,6 +1894,26 @@ export function ThreadDetail({
             poll = map[newMsg.poll_id] ?? null;
           }
 
+          // Reply quote isn't in the row — fetch the replied-to message so the
+          // quote renders live instead of only after a reload.
+          let reply_to: ReplyTo | null = null;
+          if (newMsg.reply_to_id) {
+            const { data: replyMsg } = await supabase
+              .from("messages")
+              .select("id, body, profiles(display_name)")
+              .eq("id", newMsg.reply_to_id)
+              .single();
+            if (replyMsg) {
+              reply_to = {
+                id: replyMsg.id as string,
+                body: ((replyMsg.body as string) ?? "").slice(0, 120),
+                author_name:
+                  (replyMsg.profiles as unknown as { display_name: string } | null)
+                    ?.display_name ?? "Unknown",
+              };
+            }
+          }
+
           setMessages((prev) => {
             if (prev.some((m) => m.id === newMsg.id)) return prev;
             return [
@@ -1905,7 +1925,7 @@ export function ThreadDetail({
                 poll,
                 profiles: profile ?? null,
                 reactions: REACTION_DEFAULTS,
-                reply_to: null,
+                reply_to,
               },
             ];
           });
@@ -3545,7 +3565,7 @@ export function ThreadDetail({
               value={body}
               onChange={handleBodyChange}
               onKeyDown={handleKeyDown}
-              placeholder={`Write to #${initialTitle}…`}
+              placeholder={`Write to #${initialTitle.length > 20 ? initialTitle.slice(0, 20) + "…" : initialTitle}`}
               rows={1}
               className="flex-1 min-h-[44px] md:min-h-[40px] max-h-40 border-none bg-transparent px-2.5 py-[10px] font-sans text-base md:text-[13.5px] leading-[1.45] text-ink placeholder:text-muted resize-none outline-none overflow-y-auto"
               onInput={(e) => {
