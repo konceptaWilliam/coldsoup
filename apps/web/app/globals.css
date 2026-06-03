@@ -77,23 +77,25 @@ body,
 }
 
 /* Stop the whole document/webview from rubber-band scrolling — without this,
-   a drag on iOS grabs and moves the entire standalone PWA window. */
+   a drag on iOS grabs and moves the entire standalone PWA window. Keep the
+   html background filled so the status-bar safe area never shows white. */
+html {
+  background: var(--background);
+}
 html,
 body {
   overscroll-behavior: none;
 }
 
-/* In the installed PWA, lock the body in place so touch drags can't move the
-   whole window. Every screen scrolls inside its own container (h-screen +
-   overflow-y-auto / h-screen-dynamic overflow-hidden), so nothing is lost. */
+/* In the installed PWA, prevent the document itself from scrolling so touch
+   drags can't move the whole window. Every screen scrolls inside its own
+   container, so nothing is lost. No position:fixed — that exposes the
+   status-bar area as a white bar. */
 @media (display-mode: standalone), (display-mode: fullscreen) {
   html,
   body {
-    position: fixed;
-    inset: 0;
-    width: 100%;
-    height: 100%;
     overflow: hidden;
+    height: 100%;
   }
 }
 
