@@ -253,7 +253,7 @@ export const messagesRouter = router({
       const senderName = (data?.profiles as unknown as { display_name: string } | null)?.display_name ?? "Someone";
       let pushDebug: unknown = { reached: false };
       if (thread) {
-        const { data: members } = await admin
+        const { data: members, error: membersError } = await admin
           .from("group_memberships")
           .select("user_id, profiles(push_token, notifications_paused)")
           .eq("group_id", thread.group_id)
@@ -325,7 +325,17 @@ export const messagesRouter = router({
               ).then((r) => ({ host: new URL(s.endpoint as string).host, ...r }))
             )
           );
-          pushDebug = { reached: true, eligible: eligibleUserIds.length, subs: (subs ?? []).length, results };
+          pushDebug = {
+            reached: true,
+            groupId: thread.group_id,
+            membersError: membersError?.message ?? null,
+            rawMembers: (members ?? []).length,
+            memberIds,
+            muted: mutedUserIds.size,
+            eligible: eligibleUserIds.length,
+            subs: (subs ?? []).length,
+            results,
+          };
           const dead = results
             .filter((x) => x.statusCode === 404 || x.statusCode === 410)
             .map((_, i) => (subs ?? [])[i]?.endpoint)
