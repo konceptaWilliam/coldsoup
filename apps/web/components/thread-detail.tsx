@@ -1431,6 +1431,7 @@ export function ThreadDetail({
   const [failedSends, setFailedSends] = useState<FailedEntry[]>([]);
   const [profileTarget, setProfileTarget] = useState<ProfileTarget | null>(null);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+  const [activeMessageMenuId, setActiveMessageMenuId] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [hasNewMessages, setHasNewMessages] = useState(false);
@@ -1442,6 +1443,8 @@ export function ThreadDetail({
   const isNearBottomRef = useRef(true);
   const forceScrollOnNextMessageRef = useRef(false);
   const isInitialLoad = useRef(true);
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const longPressStartRef = useRef<{ x: number; y: number } | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const composerRef = useRef<HTMLDivElement>(null);
@@ -1503,7 +1506,14 @@ export function ThreadDetail({
     isNearBottomRef.current = true;
     forceScrollOnNextMessageRef.current = false;
     setHasNewMessages(false);
+    setActiveMessageMenuId(null);
   }, [threadId]);
+
+  useEffect(() => {
+    return () => {
+      if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     setBody(readDraft(threadId));
@@ -2256,6 +2266,54 @@ export function ThreadDetail({
     editMessage.mutate({ messageId, body: editBody.trim() });
   }
 
+  function clearLongPressTimer() {
+    if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+    longPressTimerRef.current = null;
+    longPressStartRef.current = null;
+  }
+
+  function canShowMessageMenu(message: Message): boolean {
+    return !message.is_deleted && !message.delivery_status;
+  }
+
+  function startMessageLongPress(
+    e: React.PointerEvent<HTMLDivElement>,
+    message: Message,
+  ) {
+    if (e.pointerType === "mouse" || !canShowMessageMenu(message)) return;
+
+    const target = e.target as HTMLElement;
+    if (target.closest("input, textarea, select, audio, video")) return;
+
+    clearLongPressTimer();
+    longPressStartRef.current = { x: e.clientX, y: e.clientY };
+    longPressTimerRef.current = setTimeout(() => {
+      longPressTimerRef.current = null;
+      longPressStartRef.current = null;
+      setActiveMessageMenuId(message.id);
+    }, 480);
+  }
+
+  function moveMessageLongPress(e: React.PointerEvent<HTMLDivElement>) {
+    if (e.pointerType === "mouse" || !longPressStartRef.current) return;
+
+    const dx = Math.abs(e.clientX - longPressStartRef.current.x);
+    const dy = Math.abs(e.clientY - longPressStartRef.current.y);
+    if (dx > 10 || dy > 10) clearLongPressTimer();
+  }
+
+  function openMessageMenuFromContext(
+    e: React.MouseEvent<HTMLDivElement>,
+    message: Message,
+  ) {
+    if (!canShowMessageMenu(message)) return;
+    if (!window.matchMedia("(pointer: coarse)").matches) return;
+
+    e.preventDefault();
+    clearLongPressTimer();
+    setActiveMessageMenuId(message.id);
+  }
+
   function showError(msg: string) {
     setUploadError(msg);
     setTimeout(() => setUploadError(null), 6000);
@@ -2362,6 +2420,12 @@ export function ThreadDetail({
           new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
       ),
     [messages, failedMessages],
+  );
+
+  const activeMessageMenu = useMemo(
+    () =>
+      displayMessages.find((msg) => msg.id === activeMessageMenuId) ?? null,
+    [activeMessageMenuId, displayMessages],
   );
 
   const seenReceipt = useMemo(() => {
@@ -2555,16 +2619,26 @@ export function ThreadDetail({
                       <div
                         key={msg.id}
                         id={`message-${msg.id}`}
-                        className="flex gap-3 group rounded-sm px-2 -mx-2"
+                        className="flex gap-3 group rounded-sm px-2 -mx-2 select-none md:select-text"
                         style={{
                           marginTop: isSameAuthor ? 2 : 14,
+                          WebkitTouchCallout: "none",
+                          userSelect:
+                            activeMessageMenuId === msg.id ? "none" : undefined,
                           animation:
                             msg.id === highlightMessageId
                               ? "fadeUp 360ms ease-out both, messageHighlight 2.4s 400ms ease-out forwards"
                               : "fadeUp 360ms ease-out both",
                           animationDelay: `${initialDelays.current.get(msg.id) ?? 0}ms`,
                         }}
+                        onPointerDown={(e) => startMessageLongPress(e, msg)}
+                        onPointerMove={moveMessageLongPress}
+                        onPointerUp={clearLongPressTimer}
+                        onPointerCancel={clearLongPressTimer}
+                        onPointerLeave={clearLongPressTimer}
+                        onContextMenu={(e) => openMessageMenuFromContext(e, msg)}
                         onMouseEnter={(e) => {
+                          if (!window.matchMedia("(hover: hover)").matches) return;
                           const actions =
                             e.currentTarget.querySelector<HTMLElement>(
                               ".msg-actions",
@@ -2572,6 +2646,7 @@ export function ThreadDetail({
                           if (actions) actions.style.opacity = "1";
                         }}
                         onMouseLeave={(e) => {
+                          if (!window.matchMedia("(hover: hover)").matches) return;
                           const actions =
                             e.currentTarget.querySelector<HTMLElement>(
                               ".msg-actions",
@@ -3086,6 +3161,85 @@ export function ThreadDetail({
           currentThreadId={threadId}
           onClose={() => setActiveLightbox(null)}
         />
+      )}
+
+      {activeMessageMenu && canShowMessageMenu(activeMessageMenu) && (
+        <>
+          <button
+            type="button"
+            className="fixed inset-0 z-30 bg-ink/10"
+            aria-label="Close message actions"
+            onClick={() => setActiveMessageMenuId(null)}
+          />
+          <div
+            className="fixed left-3 right-3 z-40 mx-auto max-w-sm border border-border-strong bg-surface p-3 shadow-2xl"
+            style={{ bottom: "calc(env(safe-area-inset-bottom, 0px) + 92px)" }}
+          >
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <span className="min-w-0 truncate font-mono text-[10px] uppercase tracking-[0.14em] text-muted">
+                {activeMessageMenu.profiles?.display_name ?? "Unknown"} ·{" "}
+                {formatTime(activeMessageMenu.created_at)}
+              </span>
+              <button
+                type="button"
+                onClick={() => setActiveMessageMenuId(null)}
+                className="flex h-8 w-8 flex-shrink-0 items-center justify-center font-mono text-base leading-none text-muted transition-colors hover:text-ink"
+                aria-label="Close message actions"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2">
+              {REACTION_DEFAULTS.map((reaction) => (
+                <button
+                  key={reaction.type}
+                  type="button"
+                  onClick={() => {
+                    setActiveMessageMenuId(null);
+                    toggleReaction.mutate({
+                      messageId: activeMessageMenu.id,
+                      type: reaction.type as Parameters<
+                        typeof toggleReaction.mutate
+                      >[0]["type"],
+                    });
+                  }}
+                  className="flex h-12 items-center justify-center border border-border bg-surface-2 text-xl transition-colors active:bg-pastel-tint"
+                  aria-label={`React with ${reaction.type}`}
+                >
+                  {reaction.type}
+                </button>
+              ))}
+            </div>
+
+            <div className="mt-2 flex gap-2">
+              {activeMessageMenu.body.trim().length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    void copyMessage(activeMessageMenu.id, activeMessageMenu.body);
+                    setActiveMessageMenuId(null);
+                  }}
+                  className="flex h-11 flex-1 items-center justify-center border border-border bg-surface-2 px-3 font-mono text-[11px] uppercase tracking-[0.1em] text-ink transition-colors active:bg-pastel-tint"
+                >
+                  copy
+                </button>
+              )}
+              {activeMessageMenu.user_id === myInfo?.id && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveMessageMenuId(null);
+                    deleteMessage.mutate({ messageId: activeMessageMenu.id });
+                  }}
+                  className="flex h-11 flex-1 items-center justify-center border border-red-200 bg-red-50 px-3 font-mono text-[11px] uppercase tracking-[0.1em] text-red-700 transition-colors active:bg-red-100"
+                >
+                  delete
+                </button>
+              )}
+            </div>
+          </div>
+        </>
       )}
 
       {/* Composer */}
