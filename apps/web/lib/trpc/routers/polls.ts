@@ -3,7 +3,82 @@ import { TRPCError } from "@trpc/server";
 import { router, protectedProcedure } from "../trpc";
 import { createAdminClient } from "@/lib/supabase/admin";
 
+type VoterInfo = { id: string; display_name: string; avatar_url: string | null };
+type PollData = {
+  id: string;
+  question: string;
+  options: { id: string; text: string; vote_count: number; user_voted: boolean; voters: VoterInfo[] }[];
+};
+
 export const pollsRouter = router({
+  // Fetch full poll data (options, vote counts, voters) for a set of polls.
+  // Used to refresh polls live when votes/options change.
+  getMany: protectedProcedure
+    .input(z.object({ pollIds: z.array(z.string().uuid()).max(50) }))
+    .query(async ({ ctx, input }): Promise<Record<string, PollData>> => {
+      const { profile } = ctx;
+      const admin = createAdminClient();
+      if (input.pollIds.length === 0) return {};
+
+      const { data: pollRows } = await admin
+        .from("polls")
+        .select("id, question, thread_id")
+        .in("id", input.pollIds);
+      if (!pollRows || pollRows.length === 0) return {};
+
+      // Membership check — only return polls in groups the caller belongs to.
+      const threadIds = Array.from(new Set(pollRows.map((p) => p.thread_id as string)));
+      const { data: threads } = await admin.from("threads").select("id, group_id").in("id", threadIds);
+      const threadGroup = new Map((threads ?? []).map((t) => [t.id as string, t.group_id as string]));
+      const groupIds = Array.from(new Set((threads ?? []).map((t) => t.group_id as string)));
+      const { data: memberships } = await admin
+        .from("group_memberships")
+        .select("group_id")
+        .eq("user_id", profile.id)
+        .in("group_id", groupIds);
+      const memberGroupIds = new Set((memberships ?? []).map((m) => m.group_id as string));
+
+      const allowed = pollRows.filter((p) =>
+        memberGroupIds.has(threadGroup.get(p.thread_id as string) ?? "")
+      );
+      if (allowed.length === 0) return {};
+      const allowedIds = allowed.map((p) => p.id as string);
+
+      const { data: optionRows } = await admin
+        .from("poll_options")
+        .select("id, poll_id, text")
+        .in("poll_id", allowedIds)
+        .order("created_at");
+      const optionIds = (optionRows ?? []).map((o) => o.id as string);
+      const { data: voteRows } = optionIds.length > 0
+        ? await admin
+            .from("poll_votes")
+            .select("poll_option_id, user_id, profiles(id, display_name, avatar_url)")
+            .in("poll_option_id", optionIds)
+        : { data: [] as { poll_option_id: string; user_id: string; profiles: unknown }[] };
+
+      const result: Record<string, PollData> = {};
+      for (const poll of allowed) {
+        const options = (optionRows ?? [])
+          .filter((o) => o.poll_id === poll.id)
+          .map((o) => {
+            const votes = (voteRows ?? []).filter((v) => v.poll_option_id === o.id);
+            return {
+              id: o.id as string,
+              text: o.text as string,
+              vote_count: votes.length,
+              user_voted: votes.some((v) => v.user_id === profile.id),
+              voters: votes.map((v) => {
+                const p = v.profiles as { id: string; display_name: string; avatar_url: string | null } | null;
+                return { id: v.user_id as string, display_name: p?.display_name ?? "Unknown", avatar_url: p?.avatar_url ?? null };
+              }),
+            };
+          });
+        result[poll.id as string] = { id: poll.id as string, question: poll.question as string, options };
+      }
+      return result;
+    }),
+
   create: protectedProcedure
     .input(
       z.object({

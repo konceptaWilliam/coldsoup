@@ -589,6 +589,8 @@ export default function ThreadScreen() {
         data={listData}
         keyExtractor={(item) => item.id}
         inverted
+        keyboardDismissMode="on-drag"
+        keyboardShouldPersistTaps="handled"
         contentContainerStyle={listData.length === 0 ? { flexGrow: 1, justifyContent: "center" } : { paddingVertical: 12 }}
         onEndReached={() => { if (hasNextPage && !isFetchingNextPage) fetchNextPage(); }}
         onEndReachedThreshold={0.3}

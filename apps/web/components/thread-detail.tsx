@@ -5,10 +5,11 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import { trpc } from "@/lib/trpc/client";
-import { createClient, setRealtimeAuth } from "@/lib/supabase/client";
+import { createClient, setRealtimeAuth, getPresenceClient } from "@/lib/supabase/client";
 import { useUnread } from "@/lib/unread-context";
 import { useOnline } from "@/lib/presence-context";
 import { validateFile, resizeImageIfNeeded, attachmentTypeFor } from "@/lib/file-utils";
+import { haptic } from "@/lib/haptics";
 
 type ThreadStatus = "OPEN" | "URGENT" | "DONE";
 
@@ -1441,6 +1442,7 @@ export function ThreadDetail({
   const prevLatestMessageIdRef = useRef<string | null>(null);
   const handledHighlightRef = useRef<string | null>(null);
   const isNearBottomRef = useRef(true);
+  const lastScrollTopRef = useRef(0);
   const forceScrollOnNextMessageRef = useRef(false);
   const isInitialLoad = useRef(true);
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1482,6 +1484,20 @@ export function ThreadDetail({
   const updateScrollState = useCallback(() => {
     const container = scrollContainerRef.current;
     if (!container) return;
+
+    // Dismiss the soft keyboard when scrolling up (toward older messages) on
+    // touch devices, matching native chat behaviour.
+    const top = container.scrollTop;
+    const scrolledUp = top < lastScrollTopRef.current - 8;
+    lastScrollTopRef.current = top;
+    if (
+      scrolledUp &&
+      typeof window !== "undefined" &&
+      window.matchMedia("(pointer: coarse)").matches &&
+      document.activeElement === textareaRef.current
+    ) {
+      textareaRef.current?.blur();
+    }
 
     const isNearBottom = isScrolledNearBottom(container);
     isNearBottomRef.current = isNearBottom;
@@ -1546,6 +1562,7 @@ export function ThreadDetail({
 
   const createPoll = trpc.polls.create.useMutation({
     onSuccess: (msg) => {
+      haptic("light");
       setMessages((prev) => [
         ...prev,
         {
@@ -1571,6 +1588,7 @@ export function ThreadDetail({
 
   const toggleReaction = trpc.messages.toggleReaction.useMutation({
     onMutate: ({ messageId, type }) => {
+      haptic("light");
       const myName = myInfo?.display_name ?? null;
       setMessages((prev) =>
         prev.map((m) => {
@@ -1602,6 +1620,7 @@ export function ThreadDetail({
 
   const deleteMessage = trpc.messages.deleteMessage.useMutation({
     onMutate: ({ messageId }) => {
+      haptic("warning");
       setMessages((prev) =>
         prev.map((m) => (m.id === messageId ? { ...m, is_deleted: true } : m)),
       );
@@ -1744,7 +1763,7 @@ export function ThreadDetail({
 
   useEffect(() => {
     if (!myInfo) return;
-    const supabase = createClient();
+    const supabase = getPresenceClient();
 
     const channel = supabase.channel(`typing:${threadId}`, {
       config: { presence: { key: myInfo.id } },
@@ -1758,12 +1777,15 @@ export function ThreadDetail({
         display_name: string;
         typing: boolean;
       }>();
+      // A peer may briefly hold multiple presence entries (an old typing:false
+      // and a new typing:true) — treat them as typing if ANY entry is typing.
       const names = Object.entries(state)
         .filter(
           ([uid, presences]) =>
             uid !== myInfo.id &&
-            (presences as { display_name: string; typing: boolean }[])[0]
-              ?.typing,
+            (presences as { display_name: string; typing: boolean }[]).some(
+              (p) => p.typing,
+            ),
         )
         .map(
           ([, presences]) =>
@@ -1809,6 +1831,23 @@ export function ThreadDetail({
       if (token) setRealtimeAuth(supabase, token);
       if (cancelled) return;
 
+    // Re-fetch poll data for every poll in this thread and merge into state.
+    // poll_votes/poll_options carry no thread_id, so refresh all thread polls.
+    const refreshThreadPolls = async () => {
+      let pollIds: string[] = [];
+      setMessages((prev) => {
+        pollIds = prev.filter((m) => m.poll_id).map((m) => m.poll_id as string);
+        return prev;
+      });
+      if (pollIds.length === 0) return;
+      const map = await utils.polls.getMany.fetch({ pollIds });
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.poll_id && map[m.poll_id] ? { ...m, poll: map[m.poll_id] } : m,
+        ),
+      );
+    };
+
     channel = supabase
       .channel(`messages:thread:${threadId}`)
       .on(
@@ -1842,6 +1881,14 @@ export function ThreadDetail({
             .eq("id", newMsg.user_id)
             .single();
 
+          // Poll messages carry no poll payload in the row — fetch it so the
+          // poll renders live instead of appearing blank until refresh.
+          let poll = null;
+          if (newMsg.poll_id) {
+            const map = await utils.polls.getMany.fetch({ pollIds: [newMsg.poll_id] });
+            poll = map[newMsg.poll_id] ?? null;
+          }
+
           setMessages((prev) => {
             if (prev.some((m) => m.id === newMsg.id)) return prev;
             return [
@@ -1850,7 +1897,7 @@ export function ThreadDetail({
                 ...newMsg,
                 is_deleted: newMsg.is_deleted ?? false,
                 poll_id: newMsg.poll_id ?? null,
-                poll: null,
+                poll,
                 profiles: profile ?? null,
                 reactions: REACTION_DEFAULTS,
                 reply_to: null,
@@ -1858,6 +1905,16 @@ export function ThreadDetail({
             ];
           });
         },
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "poll_votes" },
+        () => refreshThreadPolls(),
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "poll_options" },
+        () => refreshThreadPolls(),
       )
       .on(
         "postgres_changes",
@@ -1939,6 +1996,7 @@ export function ThreadDetail({
 
   const sendMessage = trpc.messages.send.useMutation({
     onMutate: (vars) => {
+      haptic("light");
       const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
       const messageBody = vars.body ?? "";
       const replyTo =
@@ -2290,6 +2348,7 @@ export function ThreadDetail({
     longPressTimerRef.current = setTimeout(() => {
       longPressTimerRef.current = null;
       longPressStartRef.current = null;
+      haptic("medium");
       setActiveMessageMenuId(message.id);
     }, 480);
   }
@@ -2311,6 +2370,7 @@ export function ThreadDetail({
 
     e.preventDefault();
     clearLongPressTimer();
+    haptic("medium");
     setActiveMessageMenuId(message.id);
   }
 
@@ -2359,6 +2419,7 @@ export function ThreadDetail({
     if (!text.trim()) return;
     try {
       await navigator.clipboard.writeText(text);
+      haptic("success");
       setCopiedMessageId(messageId);
       setTimeout(() => setCopiedMessageId(null), 1600);
     } catch {
