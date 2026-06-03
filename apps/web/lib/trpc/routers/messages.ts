@@ -275,6 +275,7 @@ export const messagesRouter = router({
           return !prof?.notifications_paused;
         });
         const eligibleUserIds = eligible.map((m) => m.user_id as string);
+        console.log("[webpush] send fan-out: members", memberIds.length, "muted", mutedUserIds.size, "eligible", eligibleUserIds.length);
 
         const previewBody = input.body.slice(0, 100) || "New message";
 

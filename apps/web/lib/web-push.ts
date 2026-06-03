@@ -50,3 +50,25 @@ export async function sendWebPush(
     return "error";
   }
 }
+
+/** Like sendWebPush but returns full detail — for the test/debug endpoint. */
+export async function sendWebPushDebug(
+  sub: WebPushSub,
+  payload: WebPushPayload
+): Promise<{ ok: boolean; statusCode?: number; body?: string; message?: string }> {
+  try {
+    ensureConfigured();
+  } catch (e) {
+    return { ok: false, message: (e as Error).message };
+  }
+  try {
+    const res = await webpush.sendNotification(
+      { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+      JSON.stringify(payload)
+    );
+    return { ok: true, statusCode: res.statusCode };
+  } catch (err: unknown) {
+    const e = err as { statusCode?: number; body?: string; message?: string };
+    return { ok: false, statusCode: e?.statusCode, body: e?.body, message: e?.message };
+  }
+}

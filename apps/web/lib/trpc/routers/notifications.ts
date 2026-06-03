@@ -102,4 +102,32 @@ export const notificationsRouter = router({
       if (error) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: error.message });
       return { success: true };
     }),
+
+  // Sends a push to the caller's OWN subscriptions and returns per-endpoint
+  // results (status codes / errors). Diagnostic — bypasses Vercel log issues.
+  testPush: protectedProcedure.mutation(async ({ ctx }) => {
+    const { profile } = ctx;
+    const admin = createAdminClient();
+    const { data: subs } = await admin
+      .from("push_subscriptions")
+      .select("endpoint, p256dh, auth")
+      .eq("user_id", profile.id);
+
+    const vapidConfigured = Boolean(process.env.VAPID_PRIVATE_KEY && process.env.VAPID_PUBLIC_KEY);
+    if (!subs || subs.length === 0) {
+      return { vapidConfigured, subscriptions: 0, results: [] as unknown[] };
+    }
+
+    const { sendWebPushDebug } = await import("@/lib/web-push");
+    const results = await Promise.all(
+      subs.map(async (s) => {
+        const r = await sendWebPushDebug(
+          { endpoint: s.endpoint as string, p256dh: s.p256dh as string, auth: s.auth as string },
+          { title: "Coldsoup", body: "Test notification ✅", data: {} }
+        );
+        return { host: new URL(s.endpoint as string).host, ...r };
+      })
+    );
+    return { vapidConfigured, subscriptions: subs.length, results };
+  }),
 });
