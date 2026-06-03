@@ -1450,6 +1450,7 @@ export function ThreadDetail({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const composerRef = useRef<HTMLDivElement>(null);
+  const composerTouchYRef = useRef<number | null>(null);
   const utils = trpc.useUtils();
   const router = useRouter();
   const { markRead } = useUnread();
@@ -1776,22 +1777,20 @@ export function ThreadDetail({
       const state = channel.presenceState<{
         display_name: string;
         typing: boolean;
+        at?: number;
       }>();
-      // A peer may briefly hold multiple presence entries (an old typing:false
-      // and a new typing:true) — treat them as typing if ANY entry is typing.
+      // A peer can briefly hold multiple presence entries. Use the most recent
+      // (highest `at`) so a later typing:false wins over a stale typing:true —
+      // otherwise the indicator never clears.
       const names = Object.entries(state)
-        .filter(
-          ([uid, presences]) =>
-            uid !== myInfo.id &&
-            (presences as { display_name: string; typing: boolean }[]).some(
-              (p) => p.typing,
-            ),
-        )
-        .map(
-          ([, presences]) =>
-            (presences as { display_name: string; typing: boolean }[])[0]
-              .display_name,
-        );
+        .filter(([uid]) => uid !== myInfo.id)
+        .map(([, presences]) => {
+          const arr = presences as { display_name: string; typing: boolean; at?: number }[];
+          const latest = arr.reduce((a, b) => ((b.at ?? 0) >= (a.at ?? 0) ? b : a));
+          return latest;
+        })
+        .filter((p) => p.typing)
+        .map((p) => p.display_name);
       setTypingUsers(names);
     };
 
@@ -1804,6 +1803,7 @@ export function ThreadDetail({
           await channel.track({
             display_name: myInfo.display_name,
             typing: false,
+            at: Date.now(),
           });
         }
       });
@@ -2168,6 +2168,7 @@ export function ThreadDetail({
       presenceChannelRef.current.track({
         display_name: myInfo.display_name,
         typing: false,
+        at: Date.now(),
       });
     }
   }
@@ -2217,6 +2218,7 @@ export function ThreadDetail({
       presenceChannelRef.current.track({
         display_name: myInfo.display_name,
         typing: true,
+        at: Date.now(),
       });
       if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
       typingTimeoutRef.current = setTimeout(stopTyping, 3000);
@@ -3346,6 +3348,23 @@ export function ThreadDetail({
             </div>
 
             <div className="mt-2 flex gap-2">
+              {!activeMessageMenu.is_deleted && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setReplyingTo({
+                      id: activeMessageMenu.id,
+                      body: activeMessageMenu.body,
+                      authorName: activeMessageMenu.profiles?.display_name ?? "Unknown",
+                    });
+                    setActiveMessageMenuId(null);
+                    textareaRef.current?.focus();
+                  }}
+                  className="flex h-11 flex-1 items-center justify-center border border-border bg-surface-2 px-3 font-mono text-[11px] uppercase tracking-[0.1em] text-ink transition-colors active:bg-pastel-tint"
+                >
+                  reply
+                </button>
+              )}
               {activeMessageMenu.body.trim().length > 0 && (
                 <button
                   type="button"
@@ -3356,6 +3375,19 @@ export function ThreadDetail({
                   className="flex h-11 flex-1 items-center justify-center border border-border bg-surface-2 px-3 font-mono text-[11px] uppercase tracking-[0.1em] text-ink transition-colors active:bg-pastel-tint"
                 >
                   copy
+                </button>
+              )}
+              {activeMessageMenu.user_id === myInfo?.id && !activeMessageMenu.is_deleted && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingMessageId(activeMessageMenu.id);
+                    setEditBody(activeMessageMenu.body);
+                    setActiveMessageMenuId(null);
+                  }}
+                  className="flex h-11 flex-1 items-center justify-center border border-border bg-surface-2 px-3 font-mono text-[11px] uppercase tracking-[0.1em] text-ink transition-colors active:bg-pastel-tint"
+                >
+                  edit
                 </button>
               )}
               {activeMessageMenu.user_id === myInfo?.id && (
@@ -3376,7 +3408,25 @@ export function ThreadDetail({
       )}
 
       {/* Composer */}
-      <div className="px-4 md:px-6 pt-3 md:pt-[14px] pb-4 border-t border-border flex-shrink-0 pb-safe relative">
+      <div
+        className="px-4 md:px-6 pt-3 md:pt-[14px] pb-4 border-t border-border flex-shrink-0 pb-safe relative"
+        onTouchStart={(e) => {
+          composerTouchYRef.current = e.touches[0]?.clientY ?? null;
+        }}
+        onTouchMove={(e) => {
+          const start = composerTouchYRef.current;
+          if (start == null) return;
+          const dy = (e.touches[0]?.clientY ?? start) - start;
+          // Swipe down on the input bar dismisses the keyboard.
+          if (dy > 40 && document.activeElement === textareaRef.current) {
+            textareaRef.current?.blur();
+            composerTouchYRef.current = null;
+          }
+        }}
+        onTouchEnd={() => {
+          composerTouchYRef.current = null;
+        }}
+      >
         {hasNewMessages && (
           <button
             type="button"
@@ -3565,7 +3615,7 @@ export function ThreadDetail({
               value={body}
               onChange={handleBodyChange}
               onKeyDown={handleKeyDown}
-              placeholder={`Write to #${initialTitle.length > 20 ? initialTitle.slice(0, 20) + "…" : initialTitle}`}
+              placeholder="message"
               rows={1}
               className="flex-1 min-h-[44px] md:min-h-[40px] max-h-40 border-none bg-transparent px-2.5 py-[10px] font-sans text-base md:text-[13.5px] leading-[1.45] text-ink placeholder:text-muted resize-none outline-none overflow-y-auto"
               onInput={(e) => {
