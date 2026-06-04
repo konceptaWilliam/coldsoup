@@ -276,9 +276,6 @@ function GroupInfoModal({ groupId, groupName, onClose }: { groupId: string; grou
                 {sendInvite.error && (
                   <p className="mt-2 font-mono text-[10px] text-red-600">{sendInvite.error.message}</p>
                 )}
-                {sendInvite.data && (
-                  <p className="mt-2 font-mono text-[10px] text-muted">from: {(sendInvite.data as unknown as { usedFrom: string }).usedFrom}</p>
-                )}
                 {inviteLink && (
                   <div className="mt-2 border border-border p-2 flex items-center gap-2">
                     <span className="font-mono text-[10px] text-muted flex-1 truncate">{inviteLink}</span>

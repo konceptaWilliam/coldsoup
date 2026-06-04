@@ -126,7 +126,6 @@ export const invitesRouter = router({
         inviteUrl,
         emailSent: !emailError,
         emailError: emailError?.message ?? null,
-        usedFrom: from,
       };
     }),
 
