@@ -74,6 +74,13 @@ export const profileRouter = router({
       return { success: true };
     }),
 
+  markIntroSeen: protectedProcedure.mutation(async ({ ctx }) => {
+    const { profile } = ctx;
+    const admin = createAdminClient();
+    await admin.from("profiles").update({ intro_seen: true }).eq("id", profile.id);
+    return { success: true };
+  }),
+
   sendPasswordChangedEmail: protectedProcedure.mutation(async ({ ctx }) => {
     const { profile } = ctx;
     const resend = new Resend(process.env.RESEND_API_KEY);
