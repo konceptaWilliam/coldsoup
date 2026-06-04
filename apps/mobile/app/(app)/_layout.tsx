@@ -52,6 +52,7 @@ export default function AppLayout() {
         <Stack.Screen name="group/[groupId]" options={{ headerShown: false, gestureEnabled: false }} />
         <Stack.Screen name="members/[groupId]" options={{ headerShown: true, title: "", ...headerBase }} />
         <Stack.Screen name="thread/[threadId]" options={{ headerShown: false }} />
+        <Stack.Screen name="smeter/[smeterId]" options={{ headerShown: false }} />
       </Stack>
       </AppLockProvider>
       </PresenceProvider>

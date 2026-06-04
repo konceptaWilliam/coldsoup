@@ -27,6 +27,8 @@ import { Avatar } from "@/components/Avatar";
 import { MessageBubble } from "@/components/MessageBubble";
 import { PollCard } from "@/components/PollCard";
 import { PollCreateModal } from "@/components/PollCreateModal";
+import { SMeterCard } from "@/components/SMeterCard";
+import { SMeterCreateModal } from "@/components/SMeterCreateModal";
 import { AttachMenu } from "@/components/AttachMenu";
 import { VoiceRecordModal } from "@/components/VoiceRecordModal";
 import { MessageActionSheet, type ActionTarget } from "@/components/MessageActionSheet";
@@ -53,6 +55,7 @@ export default function ThreadScreen() {
   const flatListRef = useRef<FlatList>(null);
   const [body, setBody] = useState("");
   const [showPollCreate, setShowPollCreate] = useState(false);
+  const [showSMeterCreate, setShowSMeterCreate] = useState(false);
   const [showAttachMenu, setShowAttachMenu] = useState(false);
   const [showVoiceRecord, setShowVoiceRecord] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
@@ -212,6 +215,13 @@ export default function ThreadScreen() {
       utils.messages.list.invalidate({ threadId });
     },
   });
+  const createSmeter = trpc.smeters.create.useMutation({
+    onSuccess: () => {
+      setShowSMeterCreate(false);
+      utils.messages.list.invalidate({ threadId });
+      utils.threads.list.invalidate();
+    },
+  });
   const [status, setStatus] = useState<ThreadStatus>(
     statusParam === "URGENT" || statusParam === "DONE" ? statusParam : "OPEN"
   );
@@ -322,6 +332,13 @@ export default function ThreadScreen() {
         "postgres_changes",
         { event: "*", schema: "public", table: "thread_reads", filter: `thread_id=eq.${threadId}` },
         () => utils.threads.reads.invalidate({ threadId })
+      )
+      // smeter_responses has no thread_id to filter on; refresh this thread's
+      // list so inline S-meter cards update their vote counts live.
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "smeter_responses" },
+        () => utils.messages.list.invalidate({ threadId })
       )
       .subscribe();
 
@@ -614,6 +631,9 @@ export default function ThreadScreen() {
           if (item.poll) {
             return <PollCard poll={item.poll} messageId={item.id} />;
           }
+          if (item.smeter) {
+            return <SMeterCard smeter={item.smeter} messageId={item.id} />;
+          }
           const profile = item.profiles as { id: string; display_name: string; avatar_url: string | null } | null;
           const isMine = !!me && item.user_id === me.id;
           const isPending = item.id.startsWith("temp-");
@@ -783,6 +803,7 @@ export default function ThreadScreen() {
         onFile={pickDocument}
         onVoice={() => setShowVoiceRecord(true)}
         onPoll={() => setShowPollCreate(true)}
+        onSMeter={() => setShowSMeterCreate(true)}
         onCamera={Platform.OS !== "web" ? takePhoto : undefined}
       />
 
@@ -815,6 +836,13 @@ export default function ThreadScreen() {
         isPending={createPoll.isPending}
         onSubmit={(question, options) => createPoll.mutate({ threadId, question, options })}
         onClose={() => setShowPollCreate(false)}
+      />
+
+      <SMeterCreateModal
+        visible={showSMeterCreate}
+        isPending={createSmeter.isPending}
+        onSubmit={(mode, customDates, title) => createSmeter.mutate({ threadId, mode, customDates, title })}
+        onClose={() => setShowSMeterCreate(false)}
       />
     </KeyboardAvoidingView>
   );

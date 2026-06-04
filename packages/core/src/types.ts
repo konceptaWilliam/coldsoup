@@ -63,3 +63,48 @@ export interface MessageReaction {
   userReacted: boolean;
   users: string[];
 }
+
+export type SMeterMode = "weekly" | "dates";
+
+// Lightweight summary embedded in each smeter message in the thread list.
+// Aggregate scores stay out of it — they unlock only via smeters.get once
+// every group member has voted.
+export interface SMeterSummary {
+  id: string;
+  mode: SMeterMode;
+  title: string | null;
+  customDates: string[] | null;
+  votedCount: number;
+  memberCount: number;
+  allVoted: boolean;
+}
+
+export interface SMeterMemberStatus {
+  id: string;
+  display_name: string;
+  avatar_url: string | null;
+  hasVoted: boolean;
+}
+
+export interface SMeterMemberScore {
+  userId: string;
+  displayName: string;
+  score: number;
+}
+
+export interface SMeterDaySummary {
+  dayIndex: number;
+  avg: number;
+  max: number;
+  min: number;
+  scores: number[];
+  memberScores: SMeterMemberScore[];
+  classification: string;
+}
+
+export interface SMeterStats {
+  days: SMeterDaySummary[];
+  bestDay: number;
+  worstDay: number;
+  insights: { dayIndex: number; classification: string }[];
+}

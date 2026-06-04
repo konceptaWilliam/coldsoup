@@ -64,7 +64,7 @@ export const messagesRouter = router({
       const admin = createAdminClient();
       let query = admin
         .from("messages")
-        .select("id, body, created_at, edited_at, is_deleted, thread_id, user_id, attachments, reply_to_id, poll_id, profiles(id, display_name, avatar_url)")
+        .select("id, body, created_at, edited_at, is_deleted, thread_id, user_id, attachments, reply_to_id, poll_id, smeter_id, profiles(id, display_name, avatar_url)")
         .eq("thread_id", input.threadId)
         .order("created_at", { ascending: false })
         .limit(input.limit);
@@ -145,10 +145,49 @@ export const messagesRouter = router({
         }
       }
 
+      // Fetch a lightweight summary for any S-meter messages. Aggregate scores
+      // stay out of the list — they unlock only via smeters.get once everyone
+      // has voted. Every message here is in the same thread, hence same group.
+      const smeterIds = Array.from(new Set(rows.filter((m) => m.smeter_id).map((m) => m.smeter_id!)));
+      type SMeterSummary = {
+        id: string;
+        mode: "weekly" | "dates";
+        title: string | null;
+        customDates: string[] | null;
+        votedCount: number;
+        memberCount: number;
+        allVoted: boolean;
+      };
+      const smeterDataMap = new Map<string, SMeterSummary>();
+
+      if (smeterIds.length > 0) {
+        const [{ count: memberCount }, { data: smeterRows }, { data: smeterResponseRows }] = await Promise.all([
+          admin.from("group_memberships").select("id", { count: "exact", head: true }).eq("group_id", thread.group_id),
+          admin.from("smeters").select("id, mode, custom_dates, title").in("id", smeterIds),
+          admin.from("smeter_responses").select("smeter_id, user_id").in("smeter_id", smeterIds),
+        ]);
+        const members = memberCount ?? 0;
+        for (const s of smeterRows ?? []) {
+          const voters = new Set(
+            (smeterResponseRows ?? []).filter((r) => r.smeter_id === s.id).map((r) => r.user_id as string)
+          );
+          smeterDataMap.set(s.id as string, {
+            id: s.id as string,
+            mode: (s.mode as "weekly" | "dates") ?? "weekly",
+            title: (s.title as string | null) ?? null,
+            customDates: (s.custom_dates as string[] | null) ?? null,
+            votedCount: voters.size,
+            memberCount: members,
+            allVoted: members > 0 && voters.size === members,
+          });
+        }
+      }
+
       const messages = [...rows].reverse().map((m) => ({
         ...m,
         reply_to: m.reply_to_id ? (replyToMap.get(m.reply_to_id) ?? null) : null,
         poll: (m.poll_id ? (pollDataMap.get(m.poll_id) ?? null) : null),
+        smeter: (m.smeter_id ? (smeterDataMap.get(m.smeter_id) ?? null) : null),
         reactions: REACTION_TYPES.map((type) => {
           const users = reactionRows.filter((r) => r.message_id === m.id && r.type === type);
           return {
@@ -221,7 +260,7 @@ export const messagesRouter = router({
             attachments: input.attachments,
             reply_to_id: input.replyToId ?? null,
           })
-          .select("id, body, created_at, edited_at, is_deleted, thread_id, user_id, attachments, reply_to_id, poll_id, profiles(id, display_name, avatar_url)")
+          .select("id, body, created_at, edited_at, is_deleted, thread_id, user_id, attachments, reply_to_id, poll_id, smeter_id, profiles(id, display_name, avatar_url)")
           .single(),
         admin
           .from("threads")
@@ -349,6 +388,7 @@ export const messagesRouter = router({
         ...data,
         reply_to,
         poll: null,
+        smeter: null,
         reactions: REACTION_TYPES.map((type) => ({ type, count: 0, userReacted: false, users: [] })),
       };
     }),

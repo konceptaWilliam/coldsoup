@@ -238,7 +238,8 @@
     "photoLibrary": "Photo Library",
     "file": "File",
     "voice": "Voice Message",
-    "poll": "Poll"
+    "poll": "Poll",
+    "smeter": "S-meter"
   },
   "voice": {
     "title": "Voice message",
@@ -264,5 +265,71 @@
     "votes_one": "{{count}} vote",
     "votes_other": "{{count}} votes",
     "noVotes": "No votes"
+  },
+  "smeter": {
+    "defaultTitle": "Find a day",
+    "tapToVote": "Tap to vote →",
+    "viewResults": "View results →",
+    "votedOf": "{{voted}} of {{total}} voted",
+    "create": "Create S-meter",
+    "modeLabel": "Type",
+    "datesLabel": "Pick dates",
+    "addDate": "+ Add date",
+    "titleLabel": "Title (optional)",
+    "titlePlaceholder": "e.g. Rehearsal day",
+    "creating": "Creating…",
+    "createButton": "Create",
+    "dayProgress": "Day {{current}} of {{total}}",
+    "howFits": "How does {{day}} work for you?",
+    "prevDay": "← Back",
+    "nextDay": "Next day →",
+    "submit": "Submit",
+    "submitting": "Submitting…",
+    "submitFailed": "Could not submit your scores.",
+    "submitFailedTitle": "Submit failed",
+    "waitingTitle": "Waiting for everyone ⏳",
+    "voted": "DONE",
+    "pending": "WAITING",
+    "bestDay": "Best day",
+    "worstDay": "Worst day",
+    "overview": "Overview",
+    "mode": {
+      "weekly": "Weekly",
+      "dates": "Custom dates"
+    },
+    "pain": {
+      "1": "It works perfectly",
+      "2": "It works well",
+      "3": "It's okay",
+      "4": "It's a bit tough",
+      "5": "It's pretty tough",
+      "6": "I absolutely can't"
+    },
+    "mood": {
+      "perfect": "Works for everyone!",
+      "great": "Works for most",
+      "okay": "Split — needs compromise",
+      "tough": "Hard for several",
+      "blocked": "Blocked — someone can't",
+      "bad": "Bad day"
+    },
+    "days": {
+      "0": "Monday",
+      "1": "Tuesday",
+      "2": "Wednesday",
+      "3": "Thursday",
+      "4": "Friday",
+      "5": "Saturday",
+      "6": "Sunday"
+    },
+    "daysShort": {
+      "0": "Mon",
+      "1": "Tue",
+      "2": "Wed",
+      "3": "Thu",
+      "4": "Fri",
+      "5": "Sat",
+      "6": "Sun"
+    }
   }
 }
