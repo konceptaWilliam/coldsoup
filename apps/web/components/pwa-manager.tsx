@@ -1,9 +1,20 @@
 "use client";
 
 import { useEffect } from "react";
+import { trpc } from "@/lib/trpc/client";
 import { InstallPrompt } from "./install-prompt";
 
+function urlBase64ToUint8Array(base64String: string) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(base64);
+  const arr = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+  return arr;
+}
+
 export function PwaManager() {
+  const subscribeWebPush = trpc.notifications.subscribeWebPush.useMutation();
   useEffect(() => {
     if (typeof window === "undefined") return;
     if (!("serviceWorker" in navigator)) return;
@@ -54,6 +65,54 @@ export function PwaManager() {
       document.removeEventListener("visibilitychange", onVisible);
       window.removeEventListener("focus", clearBadge);
     };
+  }, []);
+
+  // Refresh the push subscription whenever the app opens / returns to the
+  // foreground. iOS expires PWA push subscriptions when unused — getSubscription
+  // then returns null, so we re-subscribe and upsert a fresh endpoint, keeping
+  // notifications working instead of going silent until manually re-enabled.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) return;
+    const key = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
+    if (!key) return;
+
+    let running = false;
+    const ensureSubscription = async () => {
+      if (running) return;
+      if (Notification.permission !== "granted") return;
+      running = true;
+      try {
+        const reg = await navigator.serviceWorker.ready;
+        let sub = await reg.pushManager.getSubscription();
+        if (!sub) {
+          sub = await reg.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: urlBase64ToUint8Array(key),
+          });
+        }
+        const json = sub.toJSON();
+        if (json.endpoint && json.keys) {
+          await subscribeWebPush.mutateAsync({
+            endpoint: json.endpoint,
+            keys: { p256dh: json.keys.p256dh, auth: json.keys.auth },
+            userAgent: navigator.userAgent,
+          });
+        }
+      } catch {
+        /* best-effort */
+      } finally {
+        running = false;
+      }
+    };
+
+    ensureSubscription();
+    const onVisible = () => {
+      if (document.visibilityState === "visible") ensureSubscription();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return <InstallPrompt />;
