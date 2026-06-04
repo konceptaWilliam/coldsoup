@@ -268,6 +268,17 @@ function GroupInfoModal({ groupId, groupName, onClose }: { groupId: string; grou
                     Send
                   </button>
                 </form>
+                {sendInvite.data && (sendInvite.data as unknown as { emailSent: boolean }).emailSent === false && (
+                  <p className="mt-2 font-mono text-[10px] text-amber-700">
+                    Email didn&apos;t send: {(sendInvite.data as unknown as { emailError: string | null }).emailError}. Share the link below manually.
+                  </p>
+                )}
+                {sendInvite.error && (
+                  <p className="mt-2 font-mono text-[10px] text-red-600">{sendInvite.error.message}</p>
+                )}
+                {sendInvite.data && (
+                  <p className="mt-2 font-mono text-[10px] text-muted">from: {(sendInvite.data as unknown as { usedFrom: string }).usedFrom}</p>
+                )}
                 {inviteLink && (
                   <div className="mt-2 border border-border p-2 flex items-center gap-2">
                     <span className="font-mono text-[10px] text-muted flex-1 truncate">{inviteLink}</span>

@@ -119,14 +119,15 @@ export const invitesRouter = router({
         `,
       });
 
-      if (emailError) {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: `Invite created but email failed: ${emailError.message}`,
-        });
-      }
-
-      return { ...invite, inviteUrl };
+      // Don't throw on email failure — the invite row exists and the admin can
+      // share the link manually. Surface the status so the UI can warn.
+      return {
+        ...invite,
+        inviteUrl,
+        emailSent: !emailError,
+        emailError: emailError?.message ?? null,
+        usedFrom: from,
+      };
     }),
 
   list: protectedProcedure
