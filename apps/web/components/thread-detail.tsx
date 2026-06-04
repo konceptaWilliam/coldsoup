@@ -1610,22 +1610,29 @@ export function ThreadDetail({
         const map = await utils.smeters.getMany.fetch({ smeterIds: [smeterId] }, { staleTime: 0 });
         smeter = map[smeterId] ?? null;
       }
-      setMessages((prev) => [
-        ...prev,
-        {
-          ...(msg as unknown as Message),
-          poll_id: null,
-          poll: null,
-          smeter_id: smeterId,
-          smeter,
-          reactions: [
-            { type: "👍", count: 0, userReacted: false, users: [] },
-            { type: "👎", count: 0, userReacted: false, users: [] },
-            { type: "❓", count: 0, userReacted: false, users: [] },
-          ],
-          reply_to: null,
-        },
-      ]);
+      // The await above lets the realtime INSERT echo land first, so dedupe by
+      // id — otherwise the card flashes twice until the next refetch.
+      const newId = (msg as unknown as { id: string }).id;
+      setMessages((prev) =>
+        prev.some((m) => m.id === newId)
+          ? prev
+          : [
+              ...prev,
+              {
+                ...(msg as unknown as Message),
+                poll_id: null,
+                poll: null,
+                smeter_id: smeterId,
+                smeter,
+                reactions: [
+                  { type: "👍", count: 0, userReacted: false, users: [] },
+                  { type: "👎", count: 0, userReacted: false, users: [] },
+                  { type: "❓", count: 0, userReacted: false, users: [] },
+                ],
+                reply_to: null,
+              },
+            ]
+      );
       setShowSMeterCreate(false);
       utils.messages.list.invalidate({ threadId });
     },

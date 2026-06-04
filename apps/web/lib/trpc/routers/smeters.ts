@@ -21,6 +21,74 @@ type SMeterSummary = {
   allVoted: boolean;
 };
 
+type AdminClient = ReturnType<typeof createAdminClient>;
+
+// Push to a set of users (Expo + Web Push), skipping muted/paused recipients.
+// Shared by S-meter create and completion. Best-effort — callers wrap in try.
+async function notifyParticipants(
+  admin: AdminClient,
+  recipients: string[],
+  opts: {
+    threadId: string;
+    groupId: string;
+    expoTitle: string;
+    subtitle: string;
+    expoBody: string;
+    webTitle: string;
+    webBody: string;
+    tag: string;
+  }
+) {
+  if (recipients.length === 0) return;
+
+  const [{ data: profiles }, { data: muteRows }] = await Promise.all([
+    admin.from("profiles").select("id, push_token, notifications_paused").in("id", recipients),
+    admin.from("mutes").select("user_id").in("user_id", recipients).in("target_id", [opts.threadId, opts.groupId]),
+  ]);
+  const muted = new Set((muteRows ?? []).map((m) => m.user_id as string));
+  const eligible = (profiles ?? []).filter(
+    (p) => !muted.has(p.id as string) && !(p as { notifications_paused: boolean }).notifications_paused
+  );
+  const eligibleIds = eligible.map((p) => p.id as string);
+  const data = { threadId: opts.threadId, groupId: opts.groupId };
+
+  // Expo push (mobile)
+  const tokens = eligible
+    .map((p) => (p as { push_token: string | null }).push_token)
+    .filter((tk): tk is string => Boolean(tk));
+  if (tokens.length > 0) {
+    fetch("https://exp.host/--/api/v2/push/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(
+        tokens.map((token) => ({ to: token, title: opts.expoTitle, subtitle: opts.subtitle, body: opts.expoBody, data }))
+      ),
+    }).catch(() => null);
+  }
+
+  // Web Push (PWA)
+  if (eligibleIds.length > 0) {
+    const { data: subs } = await admin
+      .from("push_subscriptions")
+      .select("endpoint, p256dh, auth")
+      .in("user_id", eligibleIds);
+    if (subs && subs.length > 0) {
+      const { sendWebPush } = await import("@/lib/web-push");
+      const payload = { title: opts.webTitle, body: opts.webBody, tag: opts.tag, data };
+      const results = await Promise.all(
+        subs.map((s) =>
+          sendWebPush(
+            { endpoint: s.endpoint as string, p256dh: s.p256dh as string, auth: s.auth as string },
+            payload
+          ).then((r) => ({ endpoint: s.endpoint as string, r }))
+        )
+      );
+      const dead = results.filter((x) => x.r === "gone").map((x) => x.endpoint);
+      if (dead.length > 0) await admin.from("push_subscriptions").delete().in("endpoint", dead);
+    }
+  }
+}
+
 export const smetersRouter = router({
   // Light summaries (counts only — no scores) for a set of S-meters. Mirrors
   // polls.getMany; used on web to refresh inline cards live as votes land and
@@ -165,8 +233,7 @@ export const smetersRouter = router({
       ]);
       if (msgErr || !message) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
 
-      // Notify the other participants (best-effort), mirroring messages.send but
-      // scoped to the chosen participant set, not the whole group.
+      // Notify the other participants (best-effort), scoped to the chosen set.
       try {
         const recipients = participantIds.filter((id) => id !== profile.id);
         if (recipients.length > 0) {
@@ -183,62 +250,16 @@ export const smetersRouter = router({
           const location = `.${groupName}#${threadTitle}`;
           const previewBody = `Started an S-meter${input.title ? `: ${input.title}` : ""}`;
 
-          const [{ data: profiles }, { data: muteRows }] = await Promise.all([
-            admin.from("profiles").select("id, push_token, notifications_paused").in("id", recipients),
-            admin.from("mutes").select("user_id").in("user_id", recipients).in("target_id", [input.threadId, thread.group_id]),
-          ]);
-          const muted = new Set((muteRows ?? []).map((m) => m.user_id as string));
-          const eligible = (profiles ?? []).filter(
-            (p) => !muted.has(p.id as string) && !(p as { notifications_paused: boolean }).notifications_paused
-          );
-          const eligibleIds = eligible.map((p) => p.id as string);
-
-          // Expo push (mobile)
-          const tokens = eligible
-            .map((p) => (p as { push_token: string | null }).push_token)
-            .filter((tk): tk is string => Boolean(tk));
-          if (tokens.length > 0) {
-            fetch("https://exp.host/--/api/v2/push/send", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(
-                tokens.map((token) => ({
-                  to: token,
-                  title: senderName,
-                  subtitle: location,
-                  body: previewBody,
-                  data: { threadId: input.threadId, groupId: thread.group_id },
-                }))
-              ),
-            }).catch(() => null);
-          }
-
-          // Web Push (PWA)
-          if (eligibleIds.length > 0) {
-            const { data: subs } = await admin
-              .from("push_subscriptions")
-              .select("endpoint, p256dh, auth")
-              .in("user_id", eligibleIds);
-            if (subs && subs.length > 0) {
-              const { sendWebPush } = await import("@/lib/web-push");
-              const payload = {
-                title: senderName,
-                body: `${location}\n${previewBody}`,
-                tag: (message.id as string) ?? input.threadId,
-                data: { threadId: input.threadId, groupId: thread.group_id },
-              };
-              const results = await Promise.all(
-                subs.map((s) =>
-                  sendWebPush(
-                    { endpoint: s.endpoint as string, p256dh: s.p256dh as string, auth: s.auth as string },
-                    payload
-                  ).then((r) => ({ endpoint: s.endpoint as string, r }))
-                )
-              );
-              const dead = results.filter((x) => x.r === "gone").map((x) => x.endpoint);
-              if (dead.length > 0) await admin.from("push_subscriptions").delete().in("endpoint", dead);
-            }
-          }
+          await notifyParticipants(admin, recipients, {
+            threadId: input.threadId,
+            groupId: thread.group_id,
+            expoTitle: senderName,
+            subtitle: location,
+            expoBody: previewBody,
+            webTitle: senderName,
+            webBody: `${location}\n${previewBody}`,
+            tag: message.id as string,
+          });
         }
       } catch {
         // best-effort; never block S-meter creation
@@ -265,7 +286,7 @@ export const smetersRouter = router({
 
       const { data: smeter } = await admin
         .from("smeters")
-        .select("id, thread_id, mode, custom_dates, participant_ids")
+        .select("id, thread_id, mode, custom_dates, participant_ids, title, created_by")
         .eq("id", input.smeterId)
         .single();
       if (!smeter) throw new TRPCError({ code: "NOT_FOUND" });
@@ -320,6 +341,71 @@ export const smetersRouter = router({
         }))
       );
       if (error) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: error.message });
+
+      // Completion: if this was the final participant to vote, publish the
+      // completed S-meter as a fresh message (a results card at the bottom of
+      // the thread) and notify everyone. Best-effort — never block the submit.
+      try {
+        const participants =
+          participantIds ??
+          ((await admin.from("group_memberships").select("user_id").eq("group_id", thread.group_id)).data ?? []).map(
+            (m) => m.user_id as string
+          );
+        const participantSet = new Set(participants);
+
+        const { data: allResp } = await admin
+          .from("smeter_responses")
+          .select("user_id")
+          .eq("smeter_id", input.smeterId);
+        const voters = new Set(
+          (allResp ?? []).filter((r) => participantSet.has(r.user_id as string)).map((r) => r.user_id as string)
+        );
+
+        // Already-published guard: the original card + a completion card = 2.
+        const { count: existingCards } = await admin
+          .from("messages")
+          .select("id", { count: "exact", head: true })
+          .eq("smeter_id", input.smeterId);
+
+        const justCompleted =
+          participants.length > 0 && voters.size === participants.length && (existingCards ?? 0) < 2;
+
+        if (justCompleted) {
+          const authorId = (smeter.created_by as string | null) ?? profile.id;
+          const [{ data: doneMsg }] = await Promise.all([
+            admin
+              .from("messages")
+              .insert({ thread_id: smeter.thread_id, user_id: authorId, body: "", smeter_id: input.smeterId })
+              .select("id")
+              .single(),
+            admin.from("threads").update({ updated_at: new Date().toISOString() }).eq("id", smeter.thread_id),
+          ]);
+
+          const { data: meta } = await admin
+            .from("threads")
+            .select("title, groups(name)")
+            .eq("id", smeter.thread_id)
+            .single();
+          const groupName = (meta?.groups as unknown as { name: string } | null)?.name ?? "";
+          const threadTitle = (meta?.title as string | null) ?? "";
+          const location = `.${groupName}#${threadTitle}`;
+          const smeterTitle = smeter.title as string | null;
+          const doneText = smeterTitle ? `S-meter ${smeterTitle} done!` : "S-meter done!";
+
+          await notifyParticipants(admin, participants.filter((id) => id !== profile.id), {
+            threadId: smeter.thread_id,
+            groupId: thread.group_id,
+            expoTitle: doneText,
+            subtitle: location,
+            expoBody: "Everyone answered — tap to see the results",
+            webTitle: doneText,
+            webBody: `${location}\nEveryone answered`,
+            tag: (doneMsg?.id as string) ?? input.smeterId,
+          });
+        }
+      } catch {
+        // best-effort; completion notice/publish must never fail the vote
+      }
 
       return { success: true };
     }),
