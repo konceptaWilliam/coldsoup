@@ -44,3 +44,7 @@ next-env.d.ts
 # markdown (keep the root README)
 *.md
 !/README.md
+
+# agent / claude config
+.agents/
+.claude/
