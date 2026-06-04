@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { trpc } from "@/lib/trpc/client";
 import { InstallPrompt } from "./install-prompt";
 
@@ -14,7 +15,20 @@ function urlBase64ToUint8Array(base64String: string) {
 }
 
 export function PwaManager() {
+  const router = useRouter();
   const subscribeWebPush = trpc.notifications.subscribeWebPush.useMutation();
+
+  // Deep-link from a tapped push notification: the service worker focuses the
+  // app and posts the target URL; navigate to it client-side.
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
+    const onMessage = (e: MessageEvent) => {
+      const data = e.data as { type?: string; url?: string } | null;
+      if (data?.type === "navigate" && data.url) router.push(data.url);
+    };
+    navigator.serviceWorker.addEventListener("message", onMessage);
+    return () => navigator.serviceWorker.removeEventListener("message", onMessage);
+  }, [router]);
   useEffect(() => {
     if (typeof window === "undefined") return;
     if (!("serviceWorker" in navigator)) return;

@@ -95,12 +95,17 @@ self.addEventListener("notificationclick", (event) => {
         }
       }
       const clientList = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+      // An app is already open: focus it and tell it to navigate client-side.
+      // (client.navigate() is unreliable in iOS standalone PWAs — postMessage +
+      // the app's router is robust.)
       for (const client of clientList) {
         if ("focus" in client) {
-          client.navigate(url);
-          return client.focus();
+          try { client.postMessage({ type: "navigate", url }); } catch (e) { /* ignore */ }
+          await client.focus();
+          return;
         }
       }
+      // No window open: open one at the target URL.
       if (self.clients.openWindow) return self.clients.openWindow(url);
     })()
   );

@@ -919,9 +919,9 @@ function DeleteAccountSection() {
 
 export default function SettingsPage() {
   return (
-    <div className="flex h-screen bg-surface">
+    <div className="flex h-screen-dynamic bg-surface">
       <div className="flex-1 overflow-y-auto">
-        <div className="max-w-2xl mx-auto px-4 md:px-6 py-8">
+        <div className="max-w-2xl mx-auto px-4 md:px-6 pt-8 pb-[calc(env(safe-area-inset-bottom)+6rem)]">
           <div className="mb-8 flex items-center gap-4">
             <Link
               href="/"
