@@ -14,6 +14,7 @@ import { useUnread } from "@/lib/unread-context";
 import { useOnline } from "@/lib/presence-context";
 import { validateFile, resizeImageIfNeeded, attachmentTypeFor } from "@/lib/file-utils";
 import { haptic } from "@/lib/haptics";
+import { SMeterCard, SMeterCreateModal, type SMeterSummary } from "@/components/smeter";
 
 type ThreadStatus = "OPEN" | "URGENT" | "DONE";
 
@@ -72,6 +73,8 @@ type Message = {
   thread_id: string;
   poll_id: string | null;
   poll: PollData | null;
+  smeter_id: string | null;
+  smeter: SMeterSummary | null;
   attachments: Attachment[];
   reactions: Reaction[];
   reply_to_id: string | null;
@@ -1435,6 +1438,7 @@ export function ThreadDetail({
   const outboxLoadedRef = useRef(false);
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
   const [showPollCreate, setShowPollCreate] = useState(false);
+  const [showSMeterCreate, setShowSMeterCreate] = useState(false);
   const [failedSends, setFailedSends] = useState<FailedEntry[]>([]);
   const [profileTarget, setProfileTarget] = useState<ProfileTarget | null>(null);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
@@ -1579,6 +1583,8 @@ export function ThreadDetail({
           poll_id:
             (msg as unknown as { poll_id: string | null }).poll_id ?? null,
           poll: null,
+          smeter_id: null,
+          smeter: null,
           reactions: [
             { type: "👍", count: 0, userReacted: false, users: [] },
             { type: "👎", count: 0, userReacted: false, users: [] },
@@ -1588,6 +1594,39 @@ export function ThreadDetail({
         },
       ]);
       setShowPollCreate(false);
+      utils.messages.list.invalidate({ threadId });
+    },
+    onError: () => {
+      forceScrollOnNextMessageRef.current = false;
+    },
+  });
+
+  const createSmeter = trpc.smeters.create.useMutation({
+    onSuccess: async (msg) => {
+      haptic("light");
+      const smeterId = (msg as unknown as { smeter_id: string | null }).smeter_id ?? null;
+      let smeter: SMeterSummary | null = null;
+      if (smeterId) {
+        const map = await utils.smeters.getMany.fetch({ smeterIds: [smeterId] }, { staleTime: 0 });
+        smeter = map[smeterId] ?? null;
+      }
+      setMessages((prev) => [
+        ...prev,
+        {
+          ...(msg as unknown as Message),
+          poll_id: null,
+          poll: null,
+          smeter_id: smeterId,
+          smeter,
+          reactions: [
+            { type: "👍", count: 0, userReacted: false, users: [] },
+            { type: "👎", count: 0, userReacted: false, users: [] },
+            { type: "❓", count: 0, userReacted: false, users: [] },
+          ],
+          reply_to: null,
+        },
+      ]);
+      setShowSMeterCreate(false);
       utils.messages.list.invalidate({ threadId });
     },
     onError: () => {
@@ -1857,6 +1896,23 @@ export function ThreadDetail({
       );
     };
 
+    // Same idea for S-meters: votes land in smeter_responses (no thread_id),
+    // so refresh every S-meter card's summary in this thread.
+    const refreshThreadSmeters = async () => {
+      let smeterIds: string[] = [];
+      setMessages((prev) => {
+        smeterIds = prev.filter((m) => m.smeter_id).map((m) => m.smeter_id as string);
+        return prev;
+      });
+      if (smeterIds.length === 0) return;
+      const map = await utils.smeters.getMany.fetch({ smeterIds }, { staleTime: 0 });
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.smeter_id && map[m.smeter_id] ? { ...m, smeter: map[m.smeter_id] } : m,
+        ),
+      );
+    };
+
     channel = supabase
       .channel(`messages:thread:${threadId}`)
       .on(
@@ -1878,6 +1934,7 @@ export function ThreadDetail({
             attachments: Attachment[];
             reply_to_id: string | null;
             poll_id: string | null;
+            smeter_id: string | null;
           };
 
           // Server-side postgres_changes filters silently drop events here,
@@ -1899,6 +1956,16 @@ export function ThreadDetail({
               { staleTime: 0 },
             );
             poll = map[newMsg.poll_id] ?? null;
+          }
+
+          // S-meter messages carry no summary in the row — fetch it.
+          let smeter: SMeterSummary | null = null;
+          if (newMsg.smeter_id) {
+            const map = await utils.smeters.getMany.fetch(
+              { smeterIds: [newMsg.smeter_id] },
+              { staleTime: 0 },
+            );
+            smeter = map[newMsg.smeter_id] ?? null;
           }
 
           // Reply quote isn't in the row — fetch the replied-to message so the
@@ -1928,6 +1995,8 @@ export function ThreadDetail({
               is_deleted: newMsg.is_deleted ?? false,
               poll_id: newMsg.poll_id ?? null,
               poll,
+              smeter_id: newMsg.smeter_id ?? null,
+              smeter,
               profiles: profile ?? null,
               reactions: REACTION_DEFAULTS,
               reply_to,
@@ -1959,6 +2028,11 @@ export function ThreadDetail({
         "postgres_changes",
         { event: "*", schema: "public", table: "poll_options" },
         () => refreshThreadPolls(),
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "smeter_responses" },
+        () => refreshThreadSmeters(),
       )
       .on(
         "postgres_changes",
@@ -2073,6 +2147,8 @@ export function ThreadDetail({
         thread_id: threadId,
         poll_id: null,
         poll: null,
+        smeter_id: null,
+        smeter: null,
         attachments: vars.attachments ?? [],
         reactions: REACTION_DEFAULTS.map((r) => ({ ...r })),
         reply_to_id: vars.replyToId ?? null,
@@ -2504,6 +2580,8 @@ export function ThreadDetail({
         thread_id: threadId,
         poll_id: null,
         poll: null,
+        smeter_id: null,
+        smeter: null,
         attachments: entry.attachments,
         reactions: REACTION_DEFAULTS.map((r) => ({ ...r })),
         reply_to_id: entry.replyToId ?? null,
@@ -2892,6 +2970,9 @@ export function ThreadDetail({
                                     myInfo={myInfo}
                                   />
                                 )}
+                                {msg.smeter && (
+                                  <SMeterCard smeter={msg.smeter} threadId={threadId} />
+                                )}
                                 {msg.body && (
                                   <p className="text-[13.5px] leading-[1.55] text-ink whitespace-pre-wrap break-words">
                                     {renderBody(
@@ -3266,6 +3347,19 @@ export function ThreadDetail({
         />
       )}
 
+      {/* S-meter create modal */}
+      {showSMeterCreate && (
+        <SMeterCreateModal
+          onSubmit={(mode, customDates, title) => {
+            forceScrollOnNextMessageRef.current = true;
+            scrollToBottom("smooth");
+            createSmeter.mutate({ threadId, mode, customDates, title });
+          }}
+          onClose={() => setShowSMeterCreate(false)}
+          isPending={createSmeter.isPending}
+        />
+      )}
+
       {/* Attachment lightbox */}
       {activeLightbox && (
         <AttachmentModal
@@ -3595,13 +3689,22 @@ export function ThreadDetail({
                       Attach a file
                     </button>
                     <button
-                      className="w-full text-left px-3 py-2 font-mono text-[12px] text-ink hover:bg-surface-2"
+                      className="w-full text-left px-3 py-2 font-mono text-[12px] text-ink hover:bg-surface-2 border-b border-border"
                       onClick={() => {
                         setAttachMenuOpen(false);
                         setShowPollCreate(true);
                       }}
                     >
                       Create a poll
+                    </button>
+                    <button
+                      className="w-full text-left px-3 py-2 font-mono text-[12px] text-ink hover:bg-surface-2"
+                      onClick={() => {
+                        setAttachMenuOpen(false);
+                        setShowSMeterCreate(true);
+                      }}
+                    >
+                      Create an S-meter
                     </button>
                   </div>
                 </>

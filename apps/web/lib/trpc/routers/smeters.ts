@@ -11,7 +11,78 @@ function expectedDays(mode: string, customDates: string[] | null): number {
   return mode === "dates" && customDates ? customDates.length : 7;
 }
 
+type SMeterSummary = {
+  id: string;
+  mode: "weekly" | "dates";
+  title: string | null;
+  customDates: string[] | null;
+  votedCount: number;
+  memberCount: number;
+  allVoted: boolean;
+};
+
 export const smetersRouter = router({
+  // Light summaries (counts only — no scores) for a set of S-meters. Mirrors
+  // polls.getMany; used on web to refresh inline cards live as votes land and
+  // to fill a newly-arrived S-meter card without a full message refetch.
+  getMany: protectedProcedure
+    .input(z.object({ smeterIds: z.array(z.string().uuid()).max(50) }))
+    .query(async ({ ctx, input }): Promise<Record<string, SMeterSummary>> => {
+      const { profile } = ctx;
+      const admin = createAdminClient();
+      if (input.smeterIds.length === 0) return {};
+
+      const { data: smeterRows } = await admin
+        .from("smeters")
+        .select("id, thread_id, mode, custom_dates, title")
+        .in("id", input.smeterIds);
+      if (!smeterRows || smeterRows.length === 0) return {};
+
+      // Membership check — only summarise S-meters in the caller's groups.
+      const threadIds = Array.from(new Set(smeterRows.map((s) => s.thread_id as string)));
+      const { data: threads } = await admin.from("threads").select("id, group_id").in("id", threadIds);
+      const threadGroup = new Map((threads ?? []).map((t) => [t.id as string, t.group_id as string]));
+      const groupIds = Array.from(new Set((threads ?? []).map((t) => t.group_id as string)));
+      const { data: memberships } = await admin
+        .from("group_memberships")
+        .select("group_id")
+        .eq("user_id", profile.id)
+        .in("group_id", groupIds);
+      const memberGroupIds = new Set((memberships ?? []).map((m) => m.group_id as string));
+
+      const allowed = smeterRows.filter((s) => memberGroupIds.has(threadGroup.get(s.thread_id as string) ?? ""));
+      if (allowed.length === 0) return {};
+      const allowedIds = allowed.map((s) => s.id as string);
+
+      // Member count per group + responses for all allowed smeters.
+      const [{ data: memberRows }, { data: responseRows }] = await Promise.all([
+        admin.from("group_memberships").select("group_id").in("group_id", groupIds),
+        admin.from("smeter_responses").select("smeter_id, user_id").in("smeter_id", allowedIds),
+      ]);
+      const memberCountByGroup = new Map<string, number>();
+      for (const m of memberRows ?? []) {
+        const g = m.group_id as string;
+        memberCountByGroup.set(g, (memberCountByGroup.get(g) ?? 0) + 1);
+      }
+
+      const result: Record<string, SMeterSummary> = {};
+      for (const s of allowed) {
+        const group = threadGroup.get(s.thread_id as string) ?? "";
+        const memberCount = memberCountByGroup.get(group) ?? 0;
+        const voters = new Set((responseRows ?? []).filter((r) => r.smeter_id === s.id).map((r) => r.user_id as string));
+        result[s.id as string] = {
+          id: s.id as string,
+          mode: (s.mode as "weekly" | "dates") ?? "weekly",
+          title: (s.title as string | null) ?? null,
+          customDates: (s.custom_dates as string[] | null) ?? null,
+          votedCount: voters.size,
+          memberCount,
+          allVoted: memberCount > 0 && voters.size === memberCount,
+        };
+      }
+      return result;
+    }),
+
   // Create an S-meter and drop it into the thread as a message (carried on
   // messages.smeter_id, exactly like polls). Any group member may create one.
   create: protectedProcedure
