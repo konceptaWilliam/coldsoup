@@ -1,7 +1,11 @@
 "use client";
 
-import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from "react";
 import Image from "next/image";
+
+// useLayoutEffect on the client (positions scroll before paint), useEffect on
+// the server to avoid the SSR warning.
+const useIsoLayoutEffect = typeof window !== "undefined" ? useLayoutEffect : useEffect;
 import { useRouter } from "next/navigation";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import { trpc } from "@/lib/trpc/client";
@@ -1401,7 +1405,9 @@ export function ThreadDetail({
   highlightMessageId?: string;
 }) {
   const [messages, setMessages] = useState<Message[]>([]);
-  const initialDelays = useRef<Map<string, number>>(new Map());
+  // Message ids present at load time — these render instantly (no fade). Only
+  // messages that arrive later (realtime / sent) animate in.
+  const noAnimateIds = useRef<Set<string>>(new Set());
   const [body, setBody] = useState("");
   const [typingUsers, setTypingUsers] = useState<string[]>([]);
   const [myInfo, setMyInfo] = useState<{
@@ -1674,15 +1680,14 @@ export function ThreadDetail({
         messages: Message[];
         hasMore: boolean;
       };
-      initialDelays.current = new Map(
-        msgs.map((m, i) => [m.id, Math.min(i * 30, 600)]),
-      );
+      // Mark the loaded batch as no-animate so it renders instantly.
+      for (const m of msgs) noAnimateIds.current.add(m.id);
       setMessages(msgs);
       setHasMore(more);
     }
   }, [loadedMessages]);
 
-  useEffect(() => {
+  useIsoLayoutEffect(() => {
     const count = messages.length;
     const latestMessage = messages[count - 1] ?? null;
 
@@ -2121,6 +2126,7 @@ export function ThreadDetail({
         hasMore: boolean;
       };
       setHasMore(more);
+      for (const m of older) noAnimateIds.current.add(m.id);
       setMessages((prev) => [...older, ...prev]);
       requestAnimationFrame(() => {
         if (container) {
@@ -2707,17 +2713,22 @@ export function ThreadDetail({
                       <div
                         key={msg.id}
                         id={`message-${msg.id}`}
-                        className="flex gap-3 group rounded-sm px-2 -mx-2 select-none md:select-text"
+                        className="relative flex gap-3 group rounded-sm px-2 -mx-2 select-none md:select-text"
                         style={{
                           marginTop: isSameAuthor ? 2 : 14,
                           WebkitTouchCallout: "none",
                           userSelect:
                             activeMessageMenuId === msg.id ? "none" : undefined,
-                          animation:
-                            msg.id === highlightMessageId
-                              ? "fadeUp 360ms ease-out both, messageHighlight 2.4s 400ms ease-out forwards"
-                              : "fadeUp 360ms ease-out both",
-                          animationDelay: `${initialDelays.current.get(msg.id) ?? 0}ms`,
+                          animation: (() => {
+                            const parts: string[] = [];
+                            if (!noAnimateIds.current.has(msg.id)) {
+                              parts.push("fadeUp 360ms ease-out both");
+                            }
+                            if (msg.id === highlightMessageId) {
+                              parts.push("messageHighlight 2.4s 400ms ease-out forwards");
+                            }
+                            return parts.length ? parts.join(", ") : undefined;
+                          })(),
                         }}
                         onPointerDown={(e) => startMessageLongPress(e, msg)}
                         onPointerMove={moveMessageLongPress}
@@ -3180,7 +3191,7 @@ export function ThreadDetail({
                           )}
 
                           {seenReaders.length > 0 && (
-                            <div className="flex items-center justify-end gap-0 mt-1.5">
+                            <div className="absolute right-2 -bottom-2 z-10 flex items-center justify-end gap-0 pointer-events-none">
                               {seenReaders.slice(0, 5).map((reader, readerIndex) => (
                                 <div
                                   key={reader.id}

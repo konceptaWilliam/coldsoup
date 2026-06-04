@@ -524,7 +524,6 @@ export function ThreadList({ groupId, groupName }: { groupId: string; groupName:
                   borderLeft: `3px solid ${borderLeftColor}`,
                   paddingLeft: "15px",
                   paddingRight: "18px",
-                  animation: `fadeUp 360ms ${i * 30}ms both ease-out`,
                 }}
               >
                 {/* Title + unread badge + timestamp */}
