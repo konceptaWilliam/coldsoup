@@ -4,9 +4,9 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { SearchDialog } from "./search-dialog";
-import { useUnread } from "@/lib/unread-context";
 import { useMobileSidebar } from "@/lib/mobile-sidebar-context";
 import { trpc } from "@/lib/trpc/client";
+import { createClient, setRealtimeAuth } from "@/lib/supabase/client";
 
 type Group = { id: string; name: string };
 
@@ -149,8 +149,36 @@ export function Sidebar({
   const [searchOpen, setSearchOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [avatarError, setAvatarError] = useState(false);
-  const { groupCounts, groupUrgentCounts } = useUnread();
+  const utils = trpc.useUtils();
+  const { data: unread = {} } = trpc.groups.unread.useQuery(undefined, { staleTime: 30_000 });
   const { isOpen, close } = useMobileSidebar();
+
+  // Keep the per-group unread dots live: any thread change (new message bumps
+  // updated_at) or read-marker change refreshes the counts — across all groups,
+  // not just the one currently open.
+  useEffect(() => {
+    const supabase = createClient();
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase.auth.getSession();
+      if (data.session) setRealtimeAuth(supabase, data.session.access_token);
+      if (cancelled) return;
+      channel = supabase
+        .channel("sidebar:unread")
+        .on("postgres_changes", { event: "*", schema: "public", table: "threads" }, () =>
+          utils.groups.unread.invalidate()
+        )
+        .on("postgres_changes", { event: "*", schema: "public", table: "thread_reads" }, () =>
+          utils.groups.unread.invalidate()
+        )
+        .subscribe();
+    })();
+    return () => {
+      cancelled = true;
+      if (channel) supabase.removeChannel(channel);
+    };
+  }, [utils]);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -251,12 +279,12 @@ export function Sidebar({
                     <span className={isActive ? "text-pastel-deep" : "text-muted-2"}>·</span>
                     <span className="lowercase">{group.name}</span>
                   </span>
-                  {(groupCounts[group.id] ?? 0) > 0 && (
+                  {(unread[group.id]?.unread ?? 0) > 0 && (
                     <span
                       className="inline-block w-2 h-2 flex-shrink-0"
                       style={{
-                        background: (groupUrgentCounts[group.id] ?? 0) > 0 ? "hsl(0 75% 52%)" : "hsl(0 70% 78%)",
-                        border: `1px solid ${(groupUrgentCounts[group.id] ?? 0) > 0 ? "hsl(0 65% 38%)" : "hsl(0 50% 62%)"}`,
+                        background: (unread[group.id]?.urgent ?? 0) > 0 ? "hsl(0 75% 52%)" : "hsl(0 70% 78%)",
+                        border: `1px solid ${(unread[group.id]?.urgent ?? 0) > 0 ? "hsl(0 65% 38%)" : "hsl(0 50% 62%)"}`,
                         transform: "rotate(45deg)",
                       }}
                     />

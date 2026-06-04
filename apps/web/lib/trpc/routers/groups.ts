@@ -34,6 +34,50 @@ export const groupsRouter = router({
       .filter((g) => g.id) as Array<{ id: string; name: string; created_at: string; myRole: string }>;
   }),
 
+  // Per-group unread counts for the sidebar dots. A thread is "unread" when its
+  // updated_at (bumped on every new message) is newer than the caller's
+  // thread_reads marker for it.
+  unread: protectedProcedure.query(async ({ ctx }) => {
+    const { supabase, profile } = ctx;
+    const admin = createAdminClient();
+
+    const { data: memberships } = await supabase
+      .from("group_memberships")
+      .select("group_id")
+      .eq("user_id", profile.id);
+    const groupIds = (memberships ?? []).map((m) => m.group_id as string);
+    if (groupIds.length === 0) return {} as Record<string, { unread: number; urgent: number }>;
+
+    const { data: threads } = await admin
+      .from("threads")
+      .select("id, group_id, status, updated_at")
+      .in("group_id", groupIds);
+    if (!threads || threads.length === 0) return {} as Record<string, { unread: number; urgent: number }>;
+
+    const threadIds = threads.map((t) => t.id as string);
+    const { data: reads } = await admin
+      .from("thread_reads")
+      .select("thread_id, last_read_at")
+      .eq("user_id", profile.id)
+      .in("thread_id", threadIds);
+    const readAt = new Map(
+      (reads ?? []).map((r) => [r.thread_id as string, new Date(r.last_read_at as string).getTime()])
+    );
+
+    const result: Record<string, { unread: number; urgent: number }> = {};
+    for (const t of threads) {
+      const updated = new Date(t.updated_at as string).getTime();
+      const read = readAt.get(t.id as string) ?? 0;
+      if (updated > read) {
+        const g = t.group_id as string;
+        if (!result[g]) result[g] = { unread: 0, urgent: 0 };
+        result[g].unread++;
+        if (t.status === "URGENT") result[g].urgent++;
+      }
+    }
+    return result;
+  }),
+
   create: protectedProcedure
     .input(z.object({ name: z.string().min(1).max(80) }))
     .mutation(async ({ ctx, input }) => {

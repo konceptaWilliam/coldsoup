@@ -1476,7 +1476,9 @@ export function ThreadDetail({
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const [mentionIndex, setMentionIndex] = useState(0);
 
-  const markReadServer = trpc.threads.markRead.useMutation();
+  const markReadServer = trpc.threads.markRead.useMutation({
+    onSuccess: () => utils.groups.unread.invalidate(),
+  });
   const { data: readReceipts = [] } = trpc.threads.reads.useQuery(
     { threadId },
     { enabled: !!threadId },
