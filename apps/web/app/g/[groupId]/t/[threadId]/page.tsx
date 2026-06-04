@@ -1,4 +1,4 @@
-import { redirect, notFound } from "next/navigation";
+import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { ThreadList } from "@/components/thread-list";
 import { ThreadDetail } from "@/components/thread-detail";
@@ -13,15 +13,9 @@ export default async function ThreadPage({
   const { groupId, threadId } = await params;
   const { highlight } = await searchParams;
 
+  // Auth is enforced by middleware — no getUser() round-trip here. Fetch only
+  // the thread + group name (single-row, by id) for the initial header.
   const supabase = await createClient();
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) redirect("/login");
-
-  // Fetch thread + group name in parallel
   const [{ data: thread }, { data: group }] = await Promise.all([
     supabase
       .from("threads")

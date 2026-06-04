@@ -1791,10 +1791,10 @@ export function ThreadDetail({
         .filter(([uid]) => uid !== myInfo.id)
         .map(([, presences]) => {
           const arr = presences as { display_name: string; typing: boolean; at?: number }[];
-          const latest = arr.reduce((a, b) => ((b.at ?? 0) >= (a.at ?? 0) ? b : a));
-          return latest;
+          if (arr.length === 0) return null;
+          return arr.reduce((a, b) => ((b.at ?? 0) >= (a.at ?? 0) ? b : a));
         })
-        .filter((p) => p.typing)
+        .filter((p): p is { display_name: string; typing: boolean; at?: number } => !!p && p.typing)
         .map((p) => p.display_name);
       setTypingUsers(names);
     };
