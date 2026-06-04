@@ -2,11 +2,13 @@ import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { appRouter } from "@/lib/trpc/router";
 import { createContext } from "@/lib/trpc/context";
 
-// Origins allowed to call the API cross-origin (Expo web dev server, app URL).
+// Origins allowed to call the API cross-origin. Localhost dev servers (Expo
+// web) are only allowed outside production.
 const ALLOWED_ORIGINS = new Set(
   [
-    "http://localhost:8081",
-    "http://localhost:19006",
+    ...(process.env.NODE_ENV !== "production"
+      ? ["http://localhost:8081", "http://localhost:19006"]
+      : []),
     process.env.NEXT_PUBLIC_APP_URL,
   ].filter(Boolean) as string[]
 );

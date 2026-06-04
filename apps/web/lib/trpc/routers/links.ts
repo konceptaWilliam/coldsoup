@@ -67,26 +67,50 @@ export const linksRouter = router({
       try {
         const ctrl = new AbortController();
         const timer = setTimeout(() => ctrl.abort(), 5000);
-        const res = await fetch(input.url, {
-          signal: ctrl.signal,
-          redirect: "follow",
-          // Many sites (YouTube, etc.) only emit OpenGraph tags to a recognized
-          // link-preview crawler UA, so identify as facebookexternalhit.
-          headers: {
-            "User-Agent": "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)",
-            Accept: "text/html",
-          },
-        });
-        clearTimeout(timer);
+        try {
+          // Follow redirects manually so every hop's host is SSRF-checked — a
+          // public URL must not be able to 30x-redirect into private/internal
+          // addresses (cloud metadata, etc.).
+          let currentUrl = input.url;
+          let res: Response | null = null;
+          for (let hop = 0; hop < 4; hop++) {
+            const u = new URL(currentUrl);
+            if ((u.protocol !== "http:" && u.protocol !== "https:") || isPrivateHost(u.hostname)) {
+              res = null;
+              break;
+            }
+            res = await fetch(currentUrl, {
+              signal: ctrl.signal,
+              redirect: "manual",
+              // Many sites only emit OpenGraph to a recognized crawler UA.
+              headers: {
+                "User-Agent": "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)",
+                Accept: "text/html",
+              },
+            });
+            if (res.status >= 300 && res.status < 400) {
+              const loc = res.headers.get("location");
+              if (!loc) break;
+              currentUrl = new URL(loc, currentUrl).toString();
+              continue;
+            }
+            break;
+          }
 
-        const ct = res.headers.get("content-type") ?? "";
-        if (res.ok && ct.includes("text/html")) {
-          const html = (await res.text()).slice(0, MAX_HTML);
-          const title = metaContent(html, "og:title") ?? decodeEntities(html.match(/<title[^>]*>([^<]*)<\/title>/i)?.[1] ?? null);
-          const description = metaContent(html, "og:description") ?? metaContent(html, "description");
-          let image_url = metaContent(html, "og:image");
-          if (image_url) { try { image_url = new URL(image_url, parsed).toString(); } catch { image_url = null; } }
-          result = { url: input.url, title, description, image_url, ok: !!title };
+          if (res) {
+            const ct = res.headers.get("content-type") ?? "";
+            if (res.ok && ct.includes("text/html")) {
+              const html = (await res.text()).slice(0, MAX_HTML);
+              const base = new URL(currentUrl);
+              const title = metaContent(html, "og:title") ?? decodeEntities(html.match(/<title[^>]*>([^<]*)<\/title>/i)?.[1] ?? null);
+              const description = metaContent(html, "og:description") ?? metaContent(html, "description");
+              let image_url = metaContent(html, "og:image");
+              if (image_url) { try { image_url = new URL(image_url, base).toString(); } catch { image_url = null; } }
+              result = { url: input.url, title, description, image_url, ok: !!title };
+            }
+          }
+        } finally {
+          clearTimeout(timer);
         }
       } catch {
         // network error / timeout / abort → cache as not-ok so we don't refetch immediately

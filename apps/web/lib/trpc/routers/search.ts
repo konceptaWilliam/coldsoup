@@ -37,6 +37,15 @@ export const searchRouter = router({
       let threadIds: string[] = [];
 
       if (input.threadId) {
+        // Verify the thread is in one of the caller's groups before searching
+        // it — otherwise this would read messages from any group (IDOR).
+        const { data: t } = await admin
+          .from("threads")
+          .select("group_id")
+          .eq("id", input.threadId)
+          .in("group_id", groupIds)
+          .maybeSingle();
+        if (!t) return { threads: [], messages: [] };
         threadIds = [input.threadId];
       } else {
         // Search thread titles
