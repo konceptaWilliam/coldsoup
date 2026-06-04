@@ -501,7 +501,7 @@ export function ThreadList({ groupId, groupName }: { groupId: string; groupName:
             <p className="text-sm text-muted font-mono">nothing here yet</p>
           </div>
         ) : (
-          sorted.map((thread, i) => {
+          sorted.map((thread) => {
             const href = `/g/${groupId}/t/${thread.id}`;
             const isActive = pathname === href;
             const isDone = thread.status === "DONE";
