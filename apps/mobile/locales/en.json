@@ -266,6 +266,15 @@
     "votes_other": "{{count}} votes",
     "noVotes": "No votes"
   },
+  "preview": {
+    "smeter": "S-meter",
+    "poll": "Poll",
+    "photo": "Photo",
+    "photos": "{{count}} photos",
+    "video": "Video",
+    "voice": "Voice message",
+    "attachment": "Attachment"
+  },
   "smeter": {
     "defaultTitle": "Find a day",
     "tapToVote": "Tap to vote →",

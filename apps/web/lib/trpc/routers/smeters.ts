@@ -34,7 +34,7 @@ export const smetersRouter = router({
 
       const { data: smeterRows } = await admin
         .from("smeters")
-        .select("id, thread_id, mode, custom_dates, title")
+        .select("id, thread_id, mode, custom_dates, title, participant_ids")
         .in("id", input.smeterIds);
       if (!smeterRows || smeterRows.length === 0) return {};
 
@@ -54,22 +54,30 @@ export const smetersRouter = router({
       if (allowed.length === 0) return {};
       const allowedIds = allowed.map((s) => s.id as string);
 
-      // Member count per group + responses for all allowed smeters.
+      // Group members (to expand null participant_ids = "all members") + responses.
       const [{ data: memberRows }, { data: responseRows }] = await Promise.all([
-        admin.from("group_memberships").select("group_id").in("group_id", groupIds),
+        admin.from("group_memberships").select("group_id, user_id").in("group_id", groupIds),
         admin.from("smeter_responses").select("smeter_id, user_id").in("smeter_id", allowedIds),
       ]);
-      const memberCountByGroup = new Map<string, number>();
+      const memberIdsByGroup = new Map<string, string[]>();
       for (const m of memberRows ?? []) {
         const g = m.group_id as string;
-        memberCountByGroup.set(g, (memberCountByGroup.get(g) ?? 0) + 1);
+        const arr = memberIdsByGroup.get(g) ?? [];
+        arr.push(m.user_id as string);
+        memberIdsByGroup.set(g, arr);
       }
 
       const result: Record<string, SMeterSummary> = {};
       for (const s of allowed) {
         const group = threadGroup.get(s.thread_id as string) ?? "";
-        const memberCount = memberCountByGroup.get(group) ?? 0;
-        const voters = new Set((responseRows ?? []).filter((r) => r.smeter_id === s.id).map((r) => r.user_id as string));
+        const participants = (s.participant_ids as string[] | null) ?? memberIdsByGroup.get(group) ?? [];
+        const participantSet = new Set(participants);
+        const voters = new Set(
+          (responseRows ?? [])
+            .filter((r) => r.smeter_id === s.id && participantSet.has(r.user_id as string))
+            .map((r) => r.user_id as string)
+        );
+        const memberCount = participants.length;
         result[s.id as string] = {
           id: s.id as string,
           mode: (s.mode as "weekly" | "dates") ?? "weekly",
@@ -93,6 +101,8 @@ export const smetersRouter = router({
           mode: z.enum(["weekly", "dates"]).default("weekly"),
           customDates: z.array(ISO_DATE).min(1).max(60).optional(),
           title: z.string().min(1).max(200).optional(),
+          // Subset of group members to include. Omitted = everyone.
+          participantIds: z.array(z.string().uuid()).min(1).max(200).optional(),
         })
         .refine((d) => d.mode !== "dates" || (d.customDates && d.customDates.length >= 1), {
           message: "customDates required for dates mode",
@@ -119,6 +129,18 @@ export const smetersRouter = router({
 
       const customDates = input.mode === "dates" ? input.customDates ?? null : null;
 
+      // Resolve participants to an explicit list: all current group members,
+      // optionally narrowed to the requested subset. Always store the set so a
+      // member who joins later doesn't silently change the gate.
+      const { data: groupMembers } = await admin
+        .from("group_memberships")
+        .select("user_id")
+        .eq("group_id", thread.group_id);
+      const memberIds = new Set((groupMembers ?? []).map((m) => m.user_id as string));
+      const requested = input.participantIds?.filter((id) => memberIds.has(id));
+      const participantIds = requested && requested.length > 0 ? requested : Array.from(memberIds);
+      if (participantIds.length === 0) throw new TRPCError({ code: "BAD_REQUEST", message: "No participants" });
+
       const { data: smeter, error: smErr } = await admin
         .from("smeters")
         .insert({
@@ -126,6 +148,7 @@ export const smetersRouter = router({
           mode: input.mode,
           custom_dates: customDates,
           title: input.title ?? null,
+          participant_ids: participantIds,
           created_by: profile.id,
         })
         .select("id")
@@ -141,6 +164,85 @@ export const smetersRouter = router({
         admin.from("threads").update({ updated_at: new Date().toISOString() }).eq("id", input.threadId),
       ]);
       if (msgErr || !message) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+
+      // Notify the other participants (best-effort), mirroring messages.send but
+      // scoped to the chosen participant set, not the whole group.
+      try {
+        const recipients = participantIds.filter((id) => id !== profile.id);
+        if (recipients.length > 0) {
+          const senderName =
+            (message.profiles as unknown as { display_name: string } | null)?.display_name ?? "Someone";
+
+          const { data: meta } = await admin
+            .from("threads")
+            .select("title, groups(name)")
+            .eq("id", input.threadId)
+            .single();
+          const groupName = (meta?.groups as unknown as { name: string } | null)?.name ?? "";
+          const threadTitle = (meta?.title as string | null) ?? "";
+          const location = `.${groupName}#${threadTitle}`;
+          const previewBody = `Started an S-meter${input.title ? `: ${input.title}` : ""}`;
+
+          const [{ data: profiles }, { data: muteRows }] = await Promise.all([
+            admin.from("profiles").select("id, push_token, notifications_paused").in("id", recipients),
+            admin.from("mutes").select("user_id").in("user_id", recipients).in("target_id", [input.threadId, thread.group_id]),
+          ]);
+          const muted = new Set((muteRows ?? []).map((m) => m.user_id as string));
+          const eligible = (profiles ?? []).filter(
+            (p) => !muted.has(p.id as string) && !(p as { notifications_paused: boolean }).notifications_paused
+          );
+          const eligibleIds = eligible.map((p) => p.id as string);
+
+          // Expo push (mobile)
+          const tokens = eligible
+            .map((p) => (p as { push_token: string | null }).push_token)
+            .filter((tk): tk is string => Boolean(tk));
+          if (tokens.length > 0) {
+            fetch("https://exp.host/--/api/v2/push/send", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(
+                tokens.map((token) => ({
+                  to: token,
+                  title: senderName,
+                  subtitle: location,
+                  body: previewBody,
+                  data: { threadId: input.threadId, groupId: thread.group_id },
+                }))
+              ),
+            }).catch(() => null);
+          }
+
+          // Web Push (PWA)
+          if (eligibleIds.length > 0) {
+            const { data: subs } = await admin
+              .from("push_subscriptions")
+              .select("endpoint, p256dh, auth")
+              .in("user_id", eligibleIds);
+            if (subs && subs.length > 0) {
+              const { sendWebPush } = await import("@/lib/web-push");
+              const payload = {
+                title: senderName,
+                body: `${location}\n${previewBody}`,
+                tag: (message.id as string) ?? input.threadId,
+                data: { threadId: input.threadId, groupId: thread.group_id },
+              };
+              const results = await Promise.all(
+                subs.map((s) =>
+                  sendWebPush(
+                    { endpoint: s.endpoint as string, p256dh: s.p256dh as string, auth: s.auth as string },
+                    payload
+                  ).then((r) => ({ endpoint: s.endpoint as string, r }))
+                )
+              );
+              const dead = results.filter((x) => x.r === "gone").map((x) => x.endpoint);
+              if (dead.length > 0) await admin.from("push_subscriptions").delete().in("endpoint", dead);
+            }
+          }
+        }
+      } catch {
+        // best-effort; never block S-meter creation
+      }
 
       return message;
     }),
@@ -163,7 +265,7 @@ export const smetersRouter = router({
 
       const { data: smeter } = await admin
         .from("smeters")
-        .select("id, thread_id, mode, custom_dates")
+        .select("id, thread_id, mode, custom_dates, participant_ids")
         .eq("id", input.smeterId)
         .single();
       if (!smeter) throw new TRPCError({ code: "NOT_FOUND" });
@@ -178,6 +280,12 @@ export const smetersRouter = router({
         .eq("user_id", profile.id)
         .single();
       if (!membership) throw new TRPCError({ code: "FORBIDDEN" });
+
+      // Only participants may vote (null = everyone).
+      const participantIds = smeter.participant_ids as string[] | null;
+      if (participantIds && !participantIds.includes(profile.id)) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Not a participant" });
+      }
 
       const expected = expectedDays(smeter.mode as string, smeter.custom_dates as string[] | null);
 
@@ -227,7 +335,7 @@ export const smetersRouter = router({
 
       const { data: smeter } = await admin
         .from("smeters")
-        .select("id, thread_id, mode, custom_dates, title, created_by, created_at")
+        .select("id, thread_id, mode, custom_dates, title, participant_ids, created_by, created_at")
         .eq("id", input.smeterId)
         .single();
       if (!smeter) throw new TRPCError({ code: "NOT_FOUND" });
@@ -258,6 +366,10 @@ export const smetersRouter = router({
       const responses = responseRows ?? [];
       const votedUserIds = new Set(responses.map((r) => r.user_id as string));
 
+      // Restrict to participants (null = all group members).
+      const participantIds = smeter.participant_ids as string[] | null;
+      const participantSet = participantIds ? new Set(participantIds) : null;
+
       const members = ((memberRows ?? [])
         .map((row) => {
           const p = row.profiles as unknown as { id: string; display_name: string; avatar_url: string | null } | null;
@@ -265,6 +377,7 @@ export const smetersRouter = router({
           return { id: p.id, display_name: p.display_name, avatar_url: p.avatar_url, hasVoted: votedUserIds.has(p.id) };
         })
         .filter(Boolean) as { id: string; display_name: string; avatar_url: string | null; hasVoted: boolean }[])
+        .filter((m) => !participantSet || participantSet.has(m.id))
         .sort((a, b) => a.display_name.localeCompare(b.display_name));
 
       const memberCount = members.length;

@@ -14,6 +14,32 @@ import { useUnread } from "@/lib/unread";
 import { useTheme } from "@/lib/theme";
 import { setLastGroup } from "@/lib/lastGroup";
 import type { ThreadStatus } from "@coldsoup/core";
+import type { TFunction } from "i18next";
+
+// Preview text for a thread's last message. Body-less messages (S-meter, poll,
+// or attachment-only) fall back to a media label instead of a blank line.
+function messagePreview(
+  lm: {
+    body?: string | null;
+    smeter_id?: string | null;
+    smeters?: { title: string | null } | null;
+    poll_id?: string | null;
+    attachments?: { type: string; name?: string }[] | null;
+  },
+  t: TFunction,
+): string {
+  if (lm.body) return lm.body;
+  if (lm.smeter_id) return lm.smeters?.title ? `${t("preview.smeter")}: ${lm.smeters.title}` : t("preview.smeter");
+  if (lm.poll_id) return t("preview.poll");
+  const a = lm.attachments?.[0];
+  if (a) {
+    if (a.type === "image") return (lm.attachments?.length ?? 0) > 1 ? t("preview.photos", { count: lm.attachments!.length }) : t("preview.photo");
+    if (a.type === "video") return t("preview.video");
+    if (a.type === "audio") return t("preview.voice");
+    return a.name || t("preview.attachment");
+  }
+  return "";
+}
 
 function formatRelative(dateStr: string) {
   const diff = Date.now() - new Date(dateStr).getTime();
@@ -192,7 +218,15 @@ export default function GroupScreen() {
         }
         renderItem={({ item }) => {
           const lastMsg = item.messages?.[0];
-          const preview = lastMsg && !lastMsg.is_deleted ? lastMsg.body : "";
+          const lm = lastMsg as
+            | (typeof lastMsg & {
+                smeter_id?: string | null;
+                smeters?: { title: string | null } | null;
+                poll_id?: string | null;
+                attachments?: { type: string; name?: string }[] | null;
+              })
+            | undefined;
+          const preview = lm && !lm.is_deleted ? messagePreview(lm, t) : "";
           const isDone = item.status === "DONE";
           const isUrgent = item.status === "URGENT";
           const activityTs = lastMsg?.created_at ? new Date(lastMsg.created_at).getTime() : 0;

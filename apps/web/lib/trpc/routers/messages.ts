@@ -32,6 +32,23 @@ function validateAttachmentUrl(url: string): boolean {
 
 const REACTION_TYPES = ["👍", "👎", "❓"] as const;
 
+// Describe a body-less message for notification/preview text by its first
+// attachment, matching the thread-list media labels.
+function describeAttachments(atts: { type: string; name?: string }[]): string {
+  const a = atts[0];
+  if (!a) return "New message";
+  switch (a.type) {
+    case "image":
+      return atts.length > 1 ? `${atts.length} photos` : "Photo";
+    case "video":
+      return "Video";
+    case "audio":
+      return "Voice message";
+    default:
+      return a.name || "Attachment";
+  }
+}
+
 export const messagesRouter = router({
   list: protectedProcedure
     .input(
@@ -161,16 +178,22 @@ export const messagesRouter = router({
       const smeterDataMap = new Map<string, SMeterSummary>();
 
       if (smeterIds.length > 0) {
-        const [{ count: memberCount }, { data: smeterRows }, { data: smeterResponseRows }] = await Promise.all([
-          admin.from("group_memberships").select("id", { count: "exact", head: true }).eq("group_id", thread.group_id),
-          admin.from("smeters").select("id, mode, custom_dates, title").in("id", smeterIds),
+        const [{ data: groupMemberRows }, { data: smeterRows }, { data: smeterResponseRows }] = await Promise.all([
+          admin.from("group_memberships").select("user_id").eq("group_id", thread.group_id),
+          admin.from("smeters").select("id, mode, custom_dates, title, participant_ids").in("id", smeterIds),
           admin.from("smeter_responses").select("smeter_id, user_id").in("smeter_id", smeterIds),
         ]);
-        const members = memberCount ?? 0;
+        const allMemberIds = (groupMemberRows ?? []).map((m) => m.user_id as string);
         for (const s of smeterRows ?? []) {
+          // null participant_ids = everyone in the group.
+          const participants = (s.participant_ids as string[] | null) ?? allMemberIds;
+          const participantSet = new Set(participants);
           const voters = new Set(
-            (smeterResponseRows ?? []).filter((r) => r.smeter_id === s.id).map((r) => r.user_id as string)
+            (smeterResponseRows ?? [])
+              .filter((r) => r.smeter_id === s.id && participantSet.has(r.user_id as string))
+              .map((r) => r.user_id as string)
           );
+          const members = participants.length;
           smeterDataMap.set(s.id as string, {
             id: s.id as string,
             mode: (s.mode as "weekly" | "dates") ?? "weekly",
@@ -315,7 +338,7 @@ export const messagesRouter = router({
         });
         const eligibleUserIds = eligible.map((m) => m.user_id as string);
 
-        const previewBody = input.body.slice(0, 100) || "New message";
+        const previewBody = input.body.slice(0, 100) || describeAttachments(input.attachments);
 
         // Location line: ".group#thread" so recipients see where it came from.
         const { data: meta } = await admin

@@ -3350,10 +3350,11 @@ export function ThreadDetail({
       {/* S-meter create modal */}
       {showSMeterCreate && (
         <SMeterCreateModal
-          onSubmit={(mode, customDates, title) => {
+          members={members}
+          onSubmit={(mode, customDates, title, participantIds) => {
             forceScrollOnNextMessageRef.current = true;
             scrollToBottom("smooth");
-            createSmeter.mutate({ threadId, mode, customDates, title });
+            createSmeter.mutate({ threadId, mode, customDates, title, participantIds });
           }}
           onClose={() => setShowSMeterCreate(false)}
           isPending={createSmeter.isPending}

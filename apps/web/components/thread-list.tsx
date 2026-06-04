@@ -26,6 +26,8 @@ type Thread = {
     body: string;
     attachments?: Array<{ type: string; name?: string }> | null;
     poll_id?: string | null;
+    smeter_id?: string | null;
+    smeters?: { title: string | null } | null;
     is_deleted?: boolean;
     created_at: string;
     profiles: { display_name: string } | null;
@@ -40,6 +42,7 @@ function lastMessagePreview(m: NonNullable<Thread["messages"]>[number]): {
 } {
   const body = (m.body ?? "").trim();
   if (body) return { text: body, media: false };
+  if (m.smeter_id) return { text: m.smeters?.title ? `S-meter: ${m.smeters.title}` : "S-meter", media: true };
   if (m.poll_id) return { text: "Poll", media: true };
   const att = m.attachments?.[0];
   if (att) {

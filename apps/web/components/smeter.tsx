@@ -406,11 +406,18 @@ function DayDetail({ day, title }: { day: NonNullable<GetData["stats"]>["days"][
 
 // ── Create modal ────────────────────────────────────────────────────────────
 export function SMeterCreateModal({
+  members,
   onSubmit,
   onClose,
   isPending,
 }: {
-  onSubmit: (mode: SMeterMode, customDates: string[] | undefined, title: string | undefined) => void;
+  members: { id: string; display_name: string }[];
+  onSubmit: (
+    mode: SMeterMode,
+    customDates: string[] | undefined,
+    title: string | undefined,
+    participantIds: string[] | undefined,
+  ) => void;
   onClose: () => void;
   isPending: boolean;
 }) {
@@ -418,8 +425,21 @@ export function SMeterCreateModal({
   const [title, setTitle] = useState("");
   const [dates, setDates] = useState<string[]>([]);
   const [dateInput, setDateInput] = useState("");
+  // Everyone included by default; clicking a block toggles them out/in.
+  const [excluded, setExcluded] = useState<Set<string>>(new Set());
 
-  const canSubmit = !isPending && (mode === "weekly" || dates.length >= 1);
+  const included = members.filter((m) => !excluded.has(m.id));
+  const canSubmit =
+    !isPending && (mode === "weekly" || dates.length >= 1) && included.length >= 1;
+
+  function toggle(id: string) {
+    setExcluded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
 
   function addDate() {
     if (!dateInput || dates.includes(dateInput)) return;
@@ -502,10 +522,48 @@ export function SMeterCreateModal({
             />
           </div>
 
+          {members.length > 0 && (
+            <div>
+              <label className="block font-mono text-[10px] font-bold text-neutral-600 uppercase tracking-wider mb-1.5">
+                Participants <span className="normal-case text-neutral-400">({included.length} of {members.length})</span>
+              </label>
+              <div className="flex flex-wrap gap-2">
+                {members.map((m) => {
+                  const isIn = !excluded.has(m.id);
+                  return (
+                    <button
+                      key={m.id}
+                      type="button"
+                      onClick={() => toggle(m.id)}
+                      title={isIn ? "Click to remove" : "Click to add back"}
+                      className="border-2 border-black px-2 py-1 font-mono text-[12px] font-bold flex items-center gap-1.5 transition-all"
+                      style={
+                        isIn
+                          ? { background: "#fff", color: "#000", boxShadow: "2px 2px 0 black" }
+                          : { background: "#E5E5E5", color: "#9A9A9A", textDecoration: "line-through" }
+                      }
+                    >
+                      {m.display_name}
+                      <span className="font-extrabold">{isIn ? "×" : "+"}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           <div className="flex gap-2 justify-end pt-1">
             <button onClick={onClose} className="font-mono text-sm text-neutral-600 hover:text-black px-4 py-2">Cancel</button>
             <button
-              onClick={() => canSubmit && onSubmit(mode, mode === "dates" ? dates : undefined, title.trim() || undefined)}
+              onClick={() =>
+                canSubmit &&
+                onSubmit(
+                  mode,
+                  mode === "dates" ? dates : undefined,
+                  title.trim() || undefined,
+                  included.length === members.length ? undefined : included.map((m) => m.id),
+                )
+              }
               disabled={!canSubmit}
               className="border-2 border-black bg-yellow-300 shadow-[4px_4px_0_black] px-5 py-2 font-mono text-sm font-extrabold text-black hover:shadow-none hover:translate-x-[4px] hover:translate-y-[4px] transition-all disabled:opacity-40"
             >
