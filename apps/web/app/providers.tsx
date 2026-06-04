@@ -5,10 +5,12 @@ import { QueryClient } from "@tanstack/react-query";
 import { PersistQueryClientProvider, removeOldestQuery } from "@tanstack/react-query-persist-client";
 import { createSyncStoragePersister } from "@tanstack/query-sync-storage-persister";
 import { httpBatchLink, loggerLink } from "@trpc/client";
+import { getQueryKey } from "@trpc/react-query";
 import superjson from "superjson";
 
 // Bump to invalidate all persisted caches (e.g. after a data-shape change).
 const CACHE_BUSTER = "1";
+const WEEK = 1000 * 60 * 60 * 24 * 7;
 import { trpc } from "@/lib/trpc/client";
 import { createClient, setRealtimeAuth } from "@/lib/supabase/client";
 import { PresenceProvider } from "@/lib/presence-context";
@@ -41,16 +43,28 @@ export function Providers({ children }: { children: React.ReactNode }) {
 
   const [queryClient] = useState(
     () =>
-      new QueryClient({
-        defaultOptions: {
-          queries: {
-            staleTime: 30_000,
-            // Keep cached data around for a day so it can be persisted/restored.
-            gcTime: 1000 * 60 * 60 * 24,
-            refetchOnWindowFocus: false,
+      (() => {
+        const client = new QueryClient({
+          defaultOptions: {
+            queries: {
+              // Messages/threads keep the short default so reopening a thread
+              // refetches and catches up on anything missed while it was closed.
+              staleTime: 30_000,
+              // Keep cached data around for a week so it survives in memory and
+              // can be persisted/restored after days away.
+              gcTime: WEEK,
+              refetchOnWindowFocus: false,
+            },
           },
-        },
-      })
+        });
+        // Rarely-changing data: longer freshness window to cut redundant
+        // refetches (and egress). Mutations still invalidate these explicitly.
+        const MIN = 60_000;
+        client.setQueryDefaults(getQueryKey(trpc.groups.list), { staleTime: 10 * MIN });
+        client.setQueryDefaults(getQueryKey(trpc.messages.groupMembers), { staleTime: 10 * MIN });
+        client.setQueryDefaults(getQueryKey(trpc.notifications.prefs), { staleTime: 5 * MIN });
+        return client;
+      })()
   );
 
   // Persist the query cache to localStorage so reopening a thread / relaunching
@@ -104,7 +118,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
             client={queryClient}
             persistOptions={{
               persister,
-              maxAge: 1000 * 60 * 60 * 24,
+              maxAge: WEEK,
               buster: CACHE_BUSTER,
               dehydrateOptions: {
                 shouldDehydrateQuery: (q) => q.state.status === "success",

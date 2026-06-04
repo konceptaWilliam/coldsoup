@@ -1,11 +1,46 @@
-// Coldsoup service worker — push notifications only (no offline caching).
+// Coldsoup service worker — push notifications + media cache.
+
+const MEDIA_CACHE = "coldsoup-media-v1";
 
 self.addEventListener("install", () => {
   self.skipWaiting();
 });
 
 self.addEventListener("activate", (event) => {
-  event.waitUntil(self.clients.claim());
+  event.waitUntil(
+    (async () => {
+      // Drop old media cache versions.
+      const keys = await caches.keys();
+      await Promise.all(
+        keys.filter((k) => k.startsWith("coldsoup-media-") && k !== MEDIA_CACHE).map((k) => caches.delete(k))
+      );
+      await self.clients.claim();
+    })()
+  );
+});
+
+// Cache-first for public storage objects (attachments/avatars). Files are
+// immutable (uuid names; avatars are cache-busted with ?t=), so a repeat view
+// is served from the device — no Supabase egress.
+self.addEventListener("fetch", (event) => {
+  if (event.request.method !== "GET") return;
+  const url = new URL(event.request.url);
+  if (!url.pathname.includes("/storage/v1/object/public/")) return;
+
+  event.respondWith(
+    (async () => {
+      const cache = await caches.open(MEDIA_CACHE);
+      const cached = await cache.match(event.request);
+      if (cached) return cached;
+      try {
+        const res = await fetch(event.request);
+        if (res.ok) cache.put(event.request, res.clone());
+        return res;
+      } catch (e) {
+        return cached || Response.error();
+      }
+    })()
+  );
 });
 
 self.addEventListener("push", (event) => {

@@ -1,5 +1,5 @@
 export const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25 MB — images, audio, docs
-export const MAX_VIDEO_SIZE = 100 * 1024 * 1024; // 100 MB — video
+export const MAX_VIDEO_SIZE = 25 * 1024 * 1024; // 25 MB — video (free-tier friendly)
 
 const IMAGE_LIST = ["jpg", "jpeg", "png", "gif", "webp"];
 const AUDIO_LIST = ["mp3", "wav", "ogg", "m4a", "aac", "flac"];
@@ -49,7 +49,7 @@ export function validateFile(file: File): FileValidationError | null {
   const isVideo = attachmentTypeFor(file) === "video";
   const limit = isVideo ? MAX_VIDEO_SIZE : MAX_FILE_SIZE;
   if (file.size > limit) {
-    const mb = isVideo ? "100" : "25";
+    const mb = Math.round(limit / 1024 / 1024).toString();
     return { file: file.name, reason: `exceeds ${mb} MB limit (${(file.size / 1024 / 1024).toFixed(1)} MB)` };
   }
   const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
@@ -59,12 +59,15 @@ export function validateFile(file: File): FileValidationError | null {
   return null;
 }
 
-const MAX_IMAGE_DIM = 1920;
-const JPEG_QUALITY = 0.85;
+const MAX_IMAGE_DIM = 1600;
+const WEBP_QUALITY = 0.8;
 
+// Downscale to MAX_IMAGE_DIM and re-encode to WebP (smaller than JPEG, strips
+// EXIF). Re-encodes even when already within size — a high-quality PNG/JPEG
+// screenshot shrinks a lot as WebP — but keeps the original if WebP isn't
+// actually smaller. Skips GIFs (would lose animation).
 export async function resizeImageIfNeeded(file: File): Promise<File> {
   if (!file.type.startsWith("image/") || file.type === "image/gif") {
-    // Don't process non-images or GIFs (would lose animation)
     return file;
   }
 
@@ -76,17 +79,11 @@ export async function resizeImageIfNeeded(file: File): Promise<File> {
       URL.revokeObjectURL(objectUrl);
 
       const { naturalWidth: w, naturalHeight: h } = img;
+      const scale = Math.min(1, MAX_IMAGE_DIM / Math.max(w, h));
 
-      if (w <= MAX_IMAGE_DIM && h <= MAX_IMAGE_DIM) {
-        // Already small enough — skip re-encoding
-        resolve(file);
-        return;
-      }
-
-      const scale = MAX_IMAGE_DIM / Math.max(w, h);
       const canvas = document.createElement("canvas");
-      canvas.width = Math.round(w * scale);
-      canvas.height = Math.round(h * scale);
+      canvas.width = Math.max(1, Math.round(w * scale));
+      canvas.height = Math.max(1, Math.round(h * scale));
 
       const ctx = canvas.getContext("2d");
       if (!ctx) { resolve(file); return; }
@@ -95,13 +92,13 @@ export async function resizeImageIfNeeded(file: File): Promise<File> {
 
       canvas.toBlob(
         (blob) => {
-          if (!blob) { resolve(file); return; }
-          // Rename to .jpg since we always output JPEG
+          // Keep the original if encoding failed or didn't shrink it.
+          if (!blob || blob.size >= file.size) { resolve(file); return; }
           const baseName = file.name.replace(/\.[^.]+$/, "");
-          resolve(new File([blob], `${baseName}.jpg`, { type: "image/jpeg" }));
+          resolve(new File([blob], `${baseName}.webp`, { type: "image/webp" }));
         },
-        "image/jpeg",
-        JPEG_QUALITY
+        "image/webp",
+        WEBP_QUALITY
       );
     };
 
