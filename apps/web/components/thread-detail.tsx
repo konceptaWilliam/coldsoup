@@ -1921,18 +1921,30 @@ export function ThreadDetail({
 
           setMessages((prev) => {
             if (prev.some((m) => m.id === newMsg.id)) return prev;
-            return [
-              ...prev,
-              {
-                ...newMsg,
-                is_deleted: newMsg.is_deleted ?? false,
-                poll_id: newMsg.poll_id ?? null,
-                poll,
-                profiles: profile ?? null,
-                reactions: REACTION_DEFAULTS,
-                reply_to,
-              },
-            ];
+            const reconciled = {
+              ...newMsg,
+              is_deleted: newMsg.is_deleted ?? false,
+              poll_id: newMsg.poll_id ?? null,
+              poll,
+              profiles: profile ?? null,
+              reactions: REACTION_DEFAULTS,
+              reply_to,
+            };
+            // If this is the realtime echo of our own optimistic message,
+            // replace the pending temp instead of appending a duplicate.
+            const tempIdx = prev.findIndex(
+              (m) =>
+                m.delivery_status &&
+                m.user_id === newMsg.user_id &&
+                m.body === newMsg.body &&
+                (m.reply_to_id ?? null) === (newMsg.reply_to_id ?? null),
+            );
+            if (tempIdx !== -1) {
+              const copy = [...prev];
+              copy[tempIdx] = reconciled;
+              return copy;
+            }
+            return [...prev, reconciled];
           });
         },
       )
