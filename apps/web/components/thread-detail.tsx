@@ -1432,6 +1432,9 @@ export function ThreadDetail({
   // messages that arrive later (realtime / sent) animate in.
   const noAnimateIds = useRef<Set<string>>(new Set());
   const [body, setBody] = useState("");
+  // True while the soft keyboard is up — used to drop the composer's safe-area
+  // bottom padding (otherwise it leaves a gap between the input and keyboard).
+  const [keyboardOpen, setKeyboardOpen] = useState(false);
   const [typingUsers, setTypingUsers] = useState<string[]>([]);
   const [myInfo, setMyInfo] = useState<{
     id: string;
@@ -1562,6 +1565,17 @@ export function ThreadDetail({
     return () => {
       if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
     };
+  }, []);
+
+  // Detect the soft keyboard via the VisualViewport: when it shrinks the visual
+  // viewport well below the layout viewport, the keyboard is up.
+  useEffect(() => {
+    const vv = typeof window !== "undefined" ? window.visualViewport : null;
+    if (!vv) return;
+    const onResize = () => setKeyboardOpen(window.innerHeight - vv.height > 120);
+    vv.addEventListener("resize", onResize);
+    onResize();
+    return () => vv.removeEventListener("resize", onResize);
   }, []);
 
   useEffect(() => {
@@ -3569,7 +3583,9 @@ export function ThreadDetail({
 
       {/* Composer */}
       <div
-        className="px-4 md:px-6 pt-3 md:pt-[14px] pb-4 border-t border-border flex-shrink-0 pb-safe relative"
+        className={`px-4 md:px-6 pt-3 md:pt-[14px] pb-4 border-t border-border flex-shrink-0 relative ${
+          keyboardOpen ? "" : "pb-safe"
+        }`}
         onTouchStart={(e) => {
           composerTouchYRef.current = e.touches[0]?.clientY ?? null;
         }}
