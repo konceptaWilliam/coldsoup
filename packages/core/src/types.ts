@@ -64,6 +64,15 @@ export interface MessageReaction {
   users: string[];
 }
 
+// System messages — thread-event notices with no author. The structured form
+// drives client rendering (i18n, the S-meter results link); a plain-text body
+// snapshot is stored alongside for previews and older clients.
+export type SystemEvent =
+  | { kind: "status"; actorName: string; from: ThreadStatus; to: ThreadStatus }
+  | { kind: "smeter_done"; smeterId: string; smeterTitle: string | null }
+  | { kind: "due_date"; actorName: string; dueDate: string | null }
+  | { kind: "thread_created"; actorName: string };
+
 export type SMeterMode = "weekly" | "dates";
 
 // Lightweight summary embedded in each smeter message in the thread list.
@@ -77,6 +86,8 @@ export interface SMeterSummary {
   votedCount: number;
   memberCount: number;
   allVoted: boolean;
+  // Whether the viewer is a participant (may vote). False = excluded.
+  isParticipant: boolean;
 }
 
 export interface SMeterMemberStatus {

@@ -2,6 +2,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, protectedProcedure } from "../trpc";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { postSystemMessage } from "@/lib/system-messages";
 
 const threadStatusSchema = z.enum(["OPEN", "URGENT", "DONE"]);
 
@@ -89,7 +90,7 @@ export const threadsRouter = router({
 
       const { data: thread } = await supabase
         .from("threads")
-        .select("group_id")
+        .select("group_id, due_date")
         .eq("id", input.threadId)
         .single();
       if (!thread) throw new TRPCError({ code: "NOT_FOUND" });
@@ -104,11 +105,21 @@ export const threadsRouter = router({
 
       if (input.dueDate === undefined) return { success: true };
 
+      const previousDue = (thread.due_date as string | null) ?? null;
+
       const { error } = await admin
         .from("threads")
         .update({ due_date: input.dueDate })
         .eq("id", input.threadId);
       if (error) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: error.message });
+
+      if ((input.dueDate ?? null) !== previousDue) {
+        await postSystemMessage(admin, input.threadId, {
+          kind: "due_date",
+          actorName: profile.display_name,
+          dueDate: input.dueDate ?? null,
+        });
+      }
 
       return { success: true };
     }),
@@ -152,6 +163,8 @@ export const threadsRouter = router({
       if (error) {
         throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: error.message });
       }
+
+      await postSystemMessage(admin, data.id, { kind: "thread_created", actorName: profile.display_name });
 
       return data;
     }),
@@ -279,7 +292,7 @@ export const threadsRouter = router({
       // Verify membership using user's client
       const { data: thread } = await supabase
         .from("threads")
-        .select("group_id")
+        .select("group_id, status")
         .eq("id", input.threadId)
         .single();
 
@@ -298,6 +311,8 @@ export const threadsRouter = router({
         throw new TRPCError({ code: "FORBIDDEN" });
       }
 
+      const fromStatus = thread.status as "OPEN" | "URGENT" | "DONE";
+
       const { data, error } = await admin
         .from("threads")
         .update({ status: input.status, updated_at: new Date().toISOString() })
@@ -307,6 +322,15 @@ export const threadsRouter = router({
 
       if (error) {
         throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: error.message });
+      }
+
+      if (fromStatus !== input.status) {
+        await postSystemMessage(admin, input.threadId, {
+          kind: "status",
+          actorName: profile.display_name,
+          from: fromStatus,
+          to: input.status,
+        });
       }
 
       return data;

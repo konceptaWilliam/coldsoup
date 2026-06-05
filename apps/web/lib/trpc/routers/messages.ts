@@ -81,7 +81,7 @@ export const messagesRouter = router({
       const admin = createAdminClient();
       let query = admin
         .from("messages")
-        .select("id, body, created_at, edited_at, is_deleted, thread_id, user_id, attachments, reply_to_id, poll_id, smeter_id, profiles(id, display_name, avatar_url)")
+        .select("id, body, created_at, edited_at, is_deleted, thread_id, user_id, attachments, reply_to_id, poll_id, smeter_id, system_event, profiles(id, display_name, avatar_url)")
         .eq("thread_id", input.threadId)
         .order("created_at", { ascending: false })
         .limit(input.limit);
@@ -174,6 +174,7 @@ export const messagesRouter = router({
         votedCount: number;
         memberCount: number;
         allVoted: boolean;
+        isParticipant: boolean;
       };
       const smeterDataMap = new Map<string, SMeterSummary>();
 
@@ -202,6 +203,7 @@ export const messagesRouter = router({
             votedCount: voters.size,
             memberCount: members,
             allVoted: members > 0 && voters.size === members,
+            isParticipant: participantSet.has(profile.id),
           });
         }
       }
@@ -211,6 +213,7 @@ export const messagesRouter = router({
         reply_to: m.reply_to_id ? (replyToMap.get(m.reply_to_id) ?? null) : null,
         poll: (m.poll_id ? (pollDataMap.get(m.poll_id) ?? null) : null),
         smeter: (m.smeter_id ? (smeterDataMap.get(m.smeter_id) ?? null) : null),
+        system_event: (m.system_event as unknown ?? null),
         reactions: REACTION_TYPES.map((type) => {
           const users = reactionRows.filter((r) => r.message_id === m.id && r.type === type);
           return {
@@ -283,7 +286,7 @@ export const messagesRouter = router({
             attachments: input.attachments,
             reply_to_id: input.replyToId ?? null,
           })
-          .select("id, body, created_at, edited_at, is_deleted, thread_id, user_id, attachments, reply_to_id, poll_id, smeter_id, profiles(id, display_name, avatar_url)")
+          .select("id, body, created_at, edited_at, is_deleted, thread_id, user_id, attachments, reply_to_id, poll_id, smeter_id, system_event, profiles(id, display_name, avatar_url)")
           .single(),
         admin
           .from("threads")
@@ -412,6 +415,7 @@ export const messagesRouter = router({
         reply_to,
         poll: null,
         smeter: null,
+        system_event: null,
         reactions: REACTION_TYPES.map((type) => ({ type, count: 0, userReacted: false, users: [] })),
       };
     }),

@@ -266,6 +266,14 @@
     "votes_other": "{{count}} votes",
     "noVotes": "No votes"
   },
+  "system": {
+    "status": "{{name}} changed thread from {{from}} to {{to}}",
+    "smeterDone": "The {{name}} s-meter is done.",
+    "tapResults": "Tap for results →",
+    "dueSet": "{{name}} set thread due date to {{date}}",
+    "dueCleared": "{{name}} cleared the thread due date",
+    "created": "{{name}} created this thread"
+  },
   "preview": {
     "smeter": "S-meter",
     "poll": "Poll",
@@ -278,6 +286,7 @@
   "smeter": {
     "defaultTitle": "Find a day",
     "tapToVote": "Tap to vote →",
+    "cantVote": "Can't vote",
     "viewResults": "View results →",
     "votedOf": "{{voted}} of {{total}} voted",
     "create": "Create S-meter",

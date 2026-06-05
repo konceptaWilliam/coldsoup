@@ -14,7 +14,8 @@ import { useUnread } from "@/lib/unread-context";
 import { useOnline } from "@/lib/presence-context";
 import { validateFile, resizeImageIfNeeded, attachmentTypeFor } from "@/lib/file-utils";
 import { haptic } from "@/lib/haptics";
-import { SMeterCard, SMeterCreateModal, type SMeterSummary } from "@/components/smeter";
+import { SMeterCard, SMeterCreateModal, SMeterResultsLink, type SMeterSummary } from "@/components/smeter";
+import { systemEventText, type SystemEvent } from "@/lib/system-event";
 
 type ThreadStatus = "OPEN" | "URGENT" | "DONE";
 
@@ -75,6 +76,7 @@ type Message = {
   poll: PollData | null;
   smeter_id: string | null;
   smeter: SMeterSummary | null;
+  system_event: SystemEvent | null;
   attachments: Attachment[];
   reactions: Reaction[];
   reply_to_id: string | null;
@@ -159,6 +161,24 @@ function writeOutbox(threadId: string, entries: FailedEntry[]) {
     if (entries.length === 0) localStorage.removeItem(outboxKey(threadId));
     else localStorage.setItem(outboxKey(threadId), JSON.stringify(entries));
   } catch {}
+}
+
+// Centered grey thread-event notice (no author bubble).
+function SystemMessage({ event, threadId }: { event: SystemEvent; threadId: string }) {
+  return (
+    <div className="flex justify-center my-3 px-4">
+      <span className="font-mono text-[11px] text-muted text-center leading-relaxed max-w-[85%]">
+        {event.kind === "smeter_done" ? (
+          <>
+            The {event.smeterTitle ?? "S-meter"} s-meter is done.{" "}
+            <SMeterResultsLink smeterId={event.smeterId} threadId={threadId} />
+          </>
+        ) : (
+          systemEventText(event)
+        )}
+      </span>
+    </div>
+  );
 }
 
 function PollView({
@@ -1585,6 +1605,7 @@ export function ThreadDetail({
           poll: null,
           smeter_id: null,
           smeter: null,
+          system_event: null,
           reactions: [
             { type: "👍", count: 0, userReacted: false, users: [] },
             { type: "👎", count: 0, userReacted: false, users: [] },
@@ -1624,6 +1645,7 @@ export function ThreadDetail({
                 poll: null,
                 smeter_id: smeterId,
                 smeter,
+                system_event: null,
                 reactions: [
                   { type: "👍", count: 0, userReacted: false, users: [] },
                   { type: "👎", count: 0, userReacted: false, users: [] },
@@ -1942,6 +1964,7 @@ export function ThreadDetail({
             reply_to_id: string | null;
             poll_id: string | null;
             smeter_id: string | null;
+            system_event: SystemEvent | null;
           };
 
           // Server-side postgres_changes filters silently drop events here,
@@ -2004,6 +2027,7 @@ export function ThreadDetail({
               poll,
               smeter_id: newMsg.smeter_id ?? null,
               smeter,
+              system_event: (newMsg.system_event ?? null) as SystemEvent | null,
               profiles: profile ?? null,
               reactions: REACTION_DEFAULTS,
               reply_to,
@@ -2156,6 +2180,7 @@ export function ThreadDetail({
         poll: null,
         smeter_id: null,
         smeter: null,
+        system_event: null,
         attachments: vars.attachments ?? [],
         reactions: REACTION_DEFAULTS.map((r) => ({ ...r })),
         reply_to_id: vars.replyToId ?? null,
@@ -2589,6 +2614,7 @@ export function ThreadDetail({
         poll: null,
         smeter_id: null,
         smeter: null,
+        system_event: null,
         attachments: entry.attachments,
         reactions: REACTION_DEFAULTS.map((r) => ({ ...r })),
         reply_to_id: entry.replyToId ?? null,
@@ -2790,6 +2816,9 @@ export function ThreadDetail({
                   </div>
 
                   {dayMessages.map((msg, idx) => {
+                    if (msg.system_event) {
+                      return <SystemMessage key={msg.id} event={msg.system_event} threadId={threadId} />;
+                    }
                     const prevMsg = idx > 0 ? dayMessages[idx - 1] : null;
                     const isSameAuthor =
                       prevMsg?.user_id === msg.user_id &&

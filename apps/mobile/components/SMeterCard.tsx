@@ -18,7 +18,12 @@ export function SMeterCard({ smeter }: { smeter: SMeterSummary; messageId: strin
     router.push({ pathname: "/(app)/smeter/[smeterId]", params: { smeterId: smeter.id } });
   };
 
-  const cta = smeter.allVoted ? t("smeter.viewResults") : t("smeter.tapToVote");
+  const cta = smeter.allVoted
+    ? t("smeter.viewResults")
+    : smeter.isParticipant
+      ? t("smeter.tapToVote")
+      : t("smeter.cantVote");
+  const ctaBg = smeter.allVoted ? NB.green : smeter.isParticipant ? NB.yellow : "#E5E5E5";
 
   return (
     <View style={{ marginHorizontal: 16, marginVertical: 6 }}>
@@ -59,7 +64,7 @@ export function SMeterCard({ smeter }: { smeter: SMeterSummary; messageId: strin
               </View>
             </View>
 
-            <View style={{ borderWidth: 2, borderColor: NB.black, backgroundColor: smeter.allVoted ? NB.green : NB.yellow, paddingVertical: 8, alignItems: "center" }}>
+            <View style={{ borderWidth: 2, borderColor: NB.black, backgroundColor: ctaBg, paddingVertical: 8, alignItems: "center" }}>
               <Text style={{ fontFamily: "monospace", fontSize: 13, fontWeight: "800", color: NB.black }}>{cta}</Text>
             </View>
           </View>

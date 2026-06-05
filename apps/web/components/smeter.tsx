@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { trpc } from "@/lib/trpc/client";
 import { createClient } from "@/lib/supabase/client";
 import type { inferRouterOutputs } from "@trpc/server";
@@ -19,6 +19,7 @@ export type SMeterSummary = {
   votedCount: number;
   memberCount: number;
   allVoted: boolean;
+  isParticipant: boolean;
 };
 
 type GetData = inferRouterOutputs<AppRouter>["smeters"]["get"];
@@ -128,12 +129,25 @@ export function SMeterCard({ smeter, threadId }: { smeter: SMeterSummary; thread
         </div>
         <div
           className="border-2 border-black py-1.5 text-center font-mono text-[13px] font-extrabold text-black"
-          style={{ background: smeter.allVoted ? "#4ADE80" : "#FDE047" }}
+          style={{ background: smeter.allVoted ? "#4ADE80" : smeter.isParticipant ? "#FDE047" : "#E5E5E5" }}
         >
-          {smeter.allVoted ? "View results →" : "Tap to vote →"}
+          {smeter.allVoted ? "View results →" : smeter.isParticipant ? "Tap to vote →" : "Can't vote"}
         </div>
       </button>
       {open && <SMeterModal smeterId={smeter.id} threadId={threadId} onClose={() => setOpen(false)} />}
+    </>
+  );
+}
+
+// Inline "click for results →" link used by the S-meter-done system message.
+export function SMeterResultsLink({ smeterId, threadId }: { smeterId: string; threadId: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button onClick={() => setOpen(true)} className="underline font-semibold text-ink hover:opacity-70">
+        Click for results →
+      </button>
+      {open && <SMeterModal smeterId={smeterId} threadId={threadId} onClose={() => setOpen(false)} />}
     </>
   );
 }
@@ -163,12 +177,51 @@ function SMeterModal({ smeterId, threadId, onClose }: { smeterId: string; thread
     return () => { supabase.removeChannel(channel); };
   }, [smeterId, utils]);
 
+  // Swipe-down-to-dismiss for the mobile/PWA bottom sheet. Only engages when the
+  // content is scrolled to the top and the drag is downward, so it doesn't fight
+  // the scroll. Desktop (centered dialog) is excluded.
+  const sheetRef = useRef<HTMLDivElement>(null);
+  const dragStart = useRef<{ y: number; scroll: number } | null>(null);
+  const [dragY, setDragY] = useState(0);
+  const [dragging, setDragging] = useState(false);
+
+  function onTouchStart(e: React.TouchEvent) {
+    if (typeof window !== "undefined" && window.matchMedia("(min-width: 640px)").matches) return;
+    dragStart.current = { y: e.touches[0].clientY, scroll: sheetRef.current?.scrollTop ?? 0 };
+  }
+  function onTouchMove(e: React.TouchEvent) {
+    const s = dragStart.current;
+    if (!s) return;
+    const dy = e.touches[0].clientY - s.y;
+    if (s.scroll <= 0 && dy > 0) {
+      setDragging(true);
+      setDragY(dy);
+    }
+  }
+  function onTouchEnd() {
+    if (dragStart.current && dragY > 110) onClose();
+    else setDragY(0);
+    setDragging(false);
+    dragStart.current = null;
+  }
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 p-0 sm:p-4"
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div className="bg-[#F5F5F5] w-full sm:max-w-lg max-h-[92vh] overflow-y-auto border-2 border-black">
+      <div
+        ref={sheetRef}
+        onTouchStart={onTouchStart}
+        onTouchMove={onTouchMove}
+        onTouchEnd={onTouchEnd}
+        style={{ transform: dragY ? `translateY(${dragY}px)` : undefined, transition: dragging ? "none" : "transform 0.2s ease" }}
+        className="bg-[#F5F5F5] w-full sm:max-w-lg max-h-[92vh] overflow-y-auto border-2 border-black"
+      >
+        {/* Drag handle (bottom-sheet affordance, mobile only) */}
+        <div className="sm:hidden flex justify-center pt-2 pb-1 bg-[#F5F5F5]">
+          <div className="w-10 h-1 bg-black/30 rounded-full" />
+        </div>
         <div className="sticky top-0 z-10 flex items-center justify-between px-4 py-3 border-b-2 border-black bg-[#F5F5F5]">
           <span className="font-mono text-[18px] font-extrabold text-black truncate">{data?.title || "S-meter"}</span>
           <button onClick={onClose} className="font-mono text-2xl leading-none text-black hover:opacity-60 w-9 h-9 flex items-center justify-center">
@@ -181,7 +234,7 @@ function SMeterModal({ smeterId, threadId, onClose }: { smeterId: string; thread
             <p className="font-mono text-sm text-neutral-600 py-12 text-center">Loading…</p>
           ) : data.stats ? (
             <StatsView data={data} stats={data.stats} />
-          ) : data.myResponses ? (
+          ) : data.myResponses || !data.isParticipant ? (
             <WaitingView data={data} />
           ) : (
             <VotingView

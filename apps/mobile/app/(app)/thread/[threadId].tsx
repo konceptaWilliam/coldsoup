@@ -29,6 +29,7 @@ import { PollCard } from "@/components/PollCard";
 import { PollCreateModal } from "@/components/PollCreateModal";
 import { SMeterCard } from "@/components/SMeterCard";
 import { SMeterCreateModal } from "@/components/SMeterCreateModal";
+import { SystemMessage } from "@/components/SystemMessage";
 import { AttachMenu } from "@/components/AttachMenu";
 import { VoiceRecordModal } from "@/components/VoiceRecordModal";
 import { MessageActionSheet, type ActionTarget } from "@/components/MessageActionSheet";
@@ -40,7 +41,7 @@ import { useTranslation } from "react-i18next";
 import * as haptics from "@/lib/haptics";
 import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "@/lib/trpc/router";
-import type { ThreadStatus, MessageAttachment, ReactionType } from "@coldsoup/core";
+import type { ThreadStatus, MessageAttachment, ReactionType, SystemEvent } from "@coldsoup/core";
 
 type ListMessage = inferRouterOutputs<AppRouter>["messages"]["list"]["messages"][number];
 
@@ -628,6 +629,9 @@ export default function ThreadScreen() {
           </View>
         }
         renderItem={({ item }) => {
+          if (item.system_event) {
+            return <SystemMessage event={item.system_event as SystemEvent} />;
+          }
           if (item.poll) {
             return <PollCard poll={item.poll} messageId={item.id} />;
           }

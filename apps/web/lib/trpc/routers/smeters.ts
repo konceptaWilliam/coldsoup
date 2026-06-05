@@ -3,6 +3,7 @@ import { TRPCError } from "@trpc/server";
 import { router, protectedProcedure } from "../trpc";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { buildStats } from "@/lib/smeter-insights";
+import { postSystemMessage } from "@/lib/system-messages";
 
 // ISO date (YYYY-MM-DD), as the standalone planner stores custom dates.
 const ISO_DATE = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Invalid date");
@@ -19,6 +20,7 @@ type SMeterSummary = {
   votedCount: number;
   memberCount: number;
   allVoted: boolean;
+  isParticipant: boolean;
 };
 
 type AdminClient = ReturnType<typeof createAdminClient>;
@@ -154,6 +156,7 @@ export const smetersRouter = router({
           votedCount: voters.size,
           memberCount,
           allVoted: memberCount > 0 && voters.size === memberCount,
+          isParticipant: participantSet.has(profile.id),
         };
       }
       return result;
@@ -342,9 +345,8 @@ export const smetersRouter = router({
       );
       if (error) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: error.message });
 
-      // Completion: if this was the final participant to vote, publish the
-      // completed S-meter as a fresh message (a results card at the bottom of
-      // the thread) and notify everyone. Best-effort — never block the submit.
+      // Completion: if this was the final participant to vote, post a system
+      // message ("… s-meter is done") and notify everyone. Best-effort.
       try {
         const participants =
           participantIds ??
@@ -361,25 +363,24 @@ export const smetersRouter = router({
           (allResp ?? []).filter((r) => participantSet.has(r.user_id as string)).map((r) => r.user_id as string)
         );
 
-        // Already-published guard: the original card + a completion card = 2.
-        const { count: existingCards } = await admin
+        // Already-posted guard: a smeter_done system message for this S-meter.
+        const { count: existingDone } = await admin
           .from("messages")
           .select("id", { count: "exact", head: true })
-          .eq("smeter_id", input.smeterId);
+          .eq("thread_id", smeter.thread_id)
+          .eq("system_event->>kind", "smeter_done")
+          .eq("system_event->>smeterId", input.smeterId);
 
         const justCompleted =
-          participants.length > 0 && voters.size === participants.length && (existingCards ?? 0) < 2;
+          participants.length > 0 && voters.size === participants.length && (existingDone ?? 0) === 0;
 
         if (justCompleted) {
-          const authorId = (smeter.created_by as string | null) ?? profile.id;
-          const [{ data: doneMsg }] = await Promise.all([
-            admin
-              .from("messages")
-              .insert({ thread_id: smeter.thread_id, user_id: authorId, body: "", smeter_id: input.smeterId })
-              .select("id")
-              .single(),
-            admin.from("threads").update({ updated_at: new Date().toISOString() }).eq("id", smeter.thread_id),
-          ]);
+          const smeterTitle = smeter.title as string | null;
+          const doneMsg = await postSystemMessage(admin, smeter.thread_id, {
+            kind: "smeter_done",
+            smeterId: input.smeterId,
+            smeterTitle,
+          });
 
           const { data: meta } = await admin
             .from("threads")
@@ -389,7 +390,6 @@ export const smetersRouter = router({
           const groupName = (meta?.groups as unknown as { name: string } | null)?.name ?? "";
           const threadTitle = (meta?.title as string | null) ?? "";
           const location = `.${groupName}#${threadTitle}`;
-          const smeterTitle = smeter.title as string | null;
           const doneText = smeterTitle ? `S-meter ${smeterTitle} done!` : "S-meter done!";
 
           await notifyParticipants(admin, participants.filter((id) => id !== profile.id), {
@@ -496,6 +496,7 @@ export const smetersRouter = router({
         memberCount,
         votedCount,
         allVoted,
+        isParticipant: !participantSet || participantSet.has(profile.id),
         myResponses: myResponses.length > 0 ? myResponses : null,
         stats,
       };

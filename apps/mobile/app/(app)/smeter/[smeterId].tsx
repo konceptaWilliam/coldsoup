@@ -53,7 +53,7 @@ export default function SMeterScreen() {
   return (
     <View style={{ flex: 1, backgroundColor: NB.surface }}>
       {/* Neo-brutal header */}
-      <View style={{ paddingHorizontal: 16, paddingTop: 56, paddingBottom: 12, borderBottomWidth: 2, borderBottomColor: NB.black, flexDirection: "row", alignItems: "center", gap: 8 }}>
+      <View style={{ paddingHorizontal: 16, paddingTop: 20, paddingBottom: 12, borderBottomWidth: 2, borderBottomColor: NB.black, flexDirection: "row", alignItems: "center", gap: 8 }}>
         <Pressable
           onPress={() => { if (router.canGoBack()) router.back(); else router.replace("/(app)"); }}
           hitSlop={8}
@@ -74,7 +74,7 @@ export default function SMeterScreen() {
         </View>
       ) : data.stats ? (
         <StatsView data={data} stats={data.stats} />
-      ) : data.myResponses ? (
+      ) : data.myResponses || !data.isParticipant ? (
         <WaitingView data={data} />
       ) : (
         <VotingView data={data} isPending={submit.isPending} onSubmit={(responses) => submit.mutate({ smeterId, responses })} />
