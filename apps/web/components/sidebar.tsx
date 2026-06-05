@@ -16,7 +16,9 @@ export function CreateGroupModal({ onClose }: { onClose: () => void }) {
   const [name, setName] = useState("");
   const [emails, setEmails] = useState("");
   const [step, setStep] = useState<"form" | "done">("form");
-  const [inviteLinks, setInviteLinks] = useState<{ email: string; url: string }[]>([]);
+  const [inviteLinks, setInviteLinks] = useState<
+    { email: string; url: string }[]
+  >([]);
   const [copied, setCopied] = useState<string | null>(null);
 
   const createGroup = trpc.groups.create.useMutation();
@@ -37,8 +39,14 @@ export function CreateGroupModal({ onClose }: { onClose: () => void }) {
     const links: { email: string; url: string }[] = [];
     for (const email of emailList) {
       try {
-        const result = await sendInvite.mutateAsync({ email, groupId: group.id });
-        links.push({ email, url: (result as unknown as { inviteUrl: string }).inviteUrl });
+        const result = await sendInvite.mutateAsync({
+          email,
+          groupId: group.id,
+        });
+        links.push({
+          email,
+          url: (result as unknown as { inviteUrl: string }).inviteUrl,
+        });
       } catch {
         // best-effort
       }
@@ -60,17 +68,32 @@ export function CreateGroupModal({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
-      <div className="bg-surface border border-border max-w-sm w-full mx-4 p-4 shadow-lg" onClick={(e) => e.stopPropagation()}>
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+      onClick={onClose}
+    >
+      <div
+        className="bg-surface border border-border max-w-sm w-full mx-4 p-4 shadow-lg"
+        onClick={(e) => e.stopPropagation()}
+      >
         {step === "form" ? (
           <>
             <div className="flex items-center justify-between mb-4">
-              <p className="font-mono text-sm font-semibold text-ink">New group</p>
-              <button onClick={onClose} className="font-mono text-[14px] text-muted hover:text-ink">×</button>
+              <p className="font-mono text-sm font-semibold text-ink">
+                New group
+              </p>
+              <button
+                onClick={onClose}
+                className="font-mono text-[14px] text-muted hover:text-ink"
+              >
+                ×
+              </button>
             </div>
             <form onSubmit={handleSubmit} className="space-y-3">
               <div>
-                <label className="font-mono text-[10px] text-muted uppercase tracking-wider block mb-1">Group name</label>
+                <label className="font-mono text-[10px] text-muted uppercase tracking-wider block mb-1">
+                  Group name
+                </label>
                 <input
                   autoFocus
                   value={name}
@@ -81,7 +104,12 @@ export function CreateGroupModal({ onClose }: { onClose: () => void }) {
                 />
               </div>
               <div>
-                <label className="font-mono text-[10px] text-muted uppercase tracking-wider block mb-1">Invite by email <span className="normal-case">(optional, comma-separated)</span></label>
+                <label className="font-mono text-[10px] text-muted uppercase tracking-wider block mb-1">
+                  Invite by email{" "}
+                  <span className="normal-case">
+                    (optional, comma-separated)
+                  </span>
+                </label>
                 <input
                   value={emails}
                   onChange={(e) => setEmails(e.target.value)}
@@ -92,12 +120,22 @@ export function CreateGroupModal({ onClose }: { onClose: () => void }) {
               <div className="flex gap-2 pt-1">
                 <button
                   type="submit"
-                  disabled={!name.trim() || createGroup.isPending || sendInvite.isPending}
+                  disabled={
+                    !name.trim() ||
+                    createGroup.isPending ||
+                    sendInvite.isPending
+                  }
                   className="flex-1 bg-ink text-surface font-mono text-sm py-2 disabled:opacity-40"
                 >
-                  {createGroup.isPending || sendInvite.isPending ? "Creating…" : "Create group"}
+                  {createGroup.isPending || sendInvite.isPending
+                    ? "Creating…"
+                    : "Create group"}
                 </button>
-                <button type="button" onClick={onClose} className="font-mono text-sm text-muted hover:text-ink px-3 py-2">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="font-mono text-sm text-muted hover:text-ink px-3 py-2"
+                >
                   Cancel
                 </button>
               </div>
@@ -106,16 +144,27 @@ export function CreateGroupModal({ onClose }: { onClose: () => void }) {
         ) : (
           <>
             <div className="flex items-center justify-between mb-4">
-              <p className="font-mono text-sm font-semibold text-ink">Group created</p>
-              <button onClick={onClose} className="font-mono text-[14px] text-muted hover:text-ink">×</button>
+              <p className="font-mono text-sm font-semibold text-ink">
+                Group created
+              </p>
+              <button
+                onClick={onClose}
+                className="font-mono text-[14px] text-muted hover:text-ink"
+              >
+                ×
+              </button>
             </div>
-            <p className="font-mono text-[11px] text-muted mb-3">Share these invite links — email delivery may be delayed.</p>
+            <p className="font-mono text-[11px] text-muted mb-3">
+              Share these invite links — email delivery may be delayed.
+            </p>
             <div className="space-y-2">
               {inviteLinks.map(({ email, url }) => (
                 <div key={email} className="border border-border p-2">
                   <p className="font-mono text-[11px] text-ink mb-1">{email}</p>
                   <div className="flex gap-2 items-center">
-                    <span className="font-mono text-[10px] text-muted truncate flex-1">{url}</span>
+                    <span className="font-mono text-[10px] text-muted truncate flex-1">
+                      {url}
+                    </span>
                     <button
                       onClick={() => copyLink(url)}
                       className="font-mono text-[10px] text-muted hover:text-ink flex-shrink-0"
@@ -126,7 +175,10 @@ export function CreateGroupModal({ onClose }: { onClose: () => void }) {
                 </div>
               ))}
             </div>
-            <button onClick={onClose} className="mt-3 w-full bg-ink text-surface font-mono text-sm py-2">
+            <button
+              onClick={onClose}
+              className="mt-3 w-full bg-ink text-surface font-mono text-sm py-2"
+            >
               Done
             </button>
           </>
@@ -150,7 +202,9 @@ export function Sidebar({
   const [createOpen, setCreateOpen] = useState(false);
   const [avatarError, setAvatarError] = useState(false);
   const utils = trpc.useUtils();
-  const { data: unread = {} } = trpc.groups.unread.useQuery(undefined, { staleTime: 30_000 });
+  const { data: unread = {} } = trpc.groups.unread.useQuery(undefined, {
+    staleTime: 30_000,
+  });
   const { isOpen, close } = useMobileSidebar();
 
   // Keep the per-group unread dots live: any thread change (new message bumps
@@ -166,11 +220,15 @@ export function Sidebar({
       if (cancelled) return;
       channel = supabase
         .channel("sidebar:unread")
-        .on("postgres_changes", { event: "*", schema: "public", table: "threads" }, () =>
-          utils.groups.unread.invalidate()
+        .on(
+          "postgres_changes",
+          { event: "*", schema: "public", table: "threads" },
+          () => utils.groups.unread.invalidate(),
         )
-        .on("postgres_changes", { event: "*", schema: "public", table: "thread_reads" }, () =>
-          utils.groups.unread.invalidate()
+        .on(
+          "postgres_changes",
+          { event: "*", schema: "public", table: "thread_reads" },
+          () => utils.groups.unread.invalidate(),
         )
         .subscribe();
     })();
@@ -220,13 +278,6 @@ export function Sidebar({
       >
         {/* Logo */}
         <div className="px-[18px] py-[18px] flex items-center gap-2">
-          <span
-            className="w-2.5 h-2.5 inline-block border border-pastel-deep flex-shrink-0"
-            style={{
-              background: "var(--pastel)",
-              transform: "rotate(45deg)",
-            }}
-          />
           <span className="font-mono text-sm font-semibold text-ink tracking-[-0.01em]">
             coldsoup
           </span>
@@ -237,8 +288,19 @@ export function Sidebar({
           onClick={() => setSearchOpen(true)}
           className="mx-3 mb-3 flex items-center gap-2 px-2.5 py-1.5 border border-border text-muted hover:text-ink hover:border-border-strong transition-colors"
         >
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0">
-            <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+          <svg
+            width="12"
+            height="12"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className="flex-shrink-0"
+          >
+            <circle cx="11" cy="11" r="8" />
+            <line x1="21" y1="21" x2="16.65" y2="16.65" />
           </svg>
           <span className="font-mono text-[11px] flex-1 text-left">search</span>
         </button>
@@ -276,14 +338,21 @@ export function Sidebar({
                   }`}
                 >
                   <span className="flex items-center gap-2">
-                    <span className={isActive ? "text-pastel-deep" : "text-muted-2"}>·</span>
+                    <span
+                      className={isActive ? "text-pastel-deep" : "text-muted-2"}
+                    >
+                      ·
+                    </span>
                     <span className="lowercase">{group.name}</span>
                   </span>
                   {(unread[group.id]?.unread ?? 0) > 0 && (
                     <span
                       className="inline-block w-2 h-2 flex-shrink-0"
                       style={{
-                        background: (unread[group.id]?.urgent ?? 0) > 0 ? "hsl(0 75% 52%)" : "hsl(0 70% 78%)",
+                        background:
+                          (unread[group.id]?.urgent ?? 0) > 0
+                            ? "hsl(0 75% 52%)"
+                            : "hsl(0 70% 78%)",
                         border: `1px solid ${(unread[group.id]?.urgent ?? 0) > 0 ? "hsl(0 65% 38%)" : "hsl(0 50% 62%)"}`,
                         transform: "rotate(45deg)",
                       }}
@@ -301,14 +370,20 @@ export function Sidebar({
             href="/settings"
             onClick={close}
             className={`block px-2 py-1.5 font-mono text-xs mb-2 transition-colors ${
-              pathname === "/settings" ? "text-ink" : "text-muted hover:text-ink"
+              pathname === "/settings"
+                ? "text-ink"
+                : "text-muted hover:text-ink"
             }`}
           >
             settings
           </Link>
           <div className="flex items-center gap-2 min-w-0">
-            <div className="w-7 h-7 flex-shrink-0 border border-border overflow-hidden flex items-center justify-center font-mono text-[10px] font-semibold"
-              style={{ background: "hsl(180 30% 92%)", color: "hsl(180 40% 28%)" }}
+            <div
+              className="w-7 h-7 flex-shrink-0 border border-border overflow-hidden flex items-center justify-center font-mono text-[10px] font-semibold"
+              style={{
+                background: "hsl(180 30% 92%)",
+                color: "hsl(180 40% 28%)",
+              }}
             >
               {avatarUrl && !avatarError ? (
                 <img
@@ -317,15 +392,22 @@ export function Sidebar({
                   className="w-full h-full object-cover"
                   onError={() => setAvatarError(true)}
                 />
-              ) : initials}
+              ) : (
+                initials
+              )}
             </div>
             <div className="min-w-0">
-              <p className="text-xs font-medium text-ink truncate leading-tight">{userDisplayName}</p>
+              <p className="text-xs font-medium text-ink truncate leading-tight">
+                {userDisplayName}
+              </p>
               <p className="font-mono text-[10px] text-muted leading-tight flex items-center gap-1">
                 online
                 <span
                   className="w-1.5 h-1.5 rounded-full flex-shrink-0"
-                  style={{ background: "var(--pastel-deep)", animation: "pulseDot 2s ease-in-out infinite" }}
+                  style={{
+                    background: "var(--pastel-deep)",
+                    animation: "pulseDot 2s ease-in-out infinite",
+                  }}
                 />
               </p>
             </div>
