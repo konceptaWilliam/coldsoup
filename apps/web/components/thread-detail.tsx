@@ -3790,6 +3790,10 @@ export function ThreadDetail({
               }}
             />
             <button
+              // Keep the textarea focused so the mobile keyboard stays open —
+              // preventing the default pointer-down stops the button stealing
+              // focus (a programmatic refocus won't reopen the keyboard).
+              onPointerDown={(e) => e.preventDefault()}
               onClick={handleSend}
               disabled={!canSend}
               className={`h-11 md:h-10 px-4 flex-shrink-0 font-mono text-[11px] uppercase tracking-[0.1em] border-none transition-all duration-200 ${
