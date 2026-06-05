@@ -1477,6 +1477,10 @@ export function ThreadDetail({
   const isNearBottomRef = useRef(true);
   const lastScrollTopRef = useRef(0);
   const forceScrollOnNextMessageRef = useRef(false);
+  // Suppress the scroll-up keyboard-dismiss briefly after sending, so the
+  // optimistic insert + auto-scroll reflow doesn't blur the input (closing the
+  // keyboard) on touch devices.
+  const suppressKbDismissRef = useRef(0);
   const isInitialLoad = useRef(true);
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const longPressStartRef = useRef<{ x: number; y: number } | null>(null);
@@ -1528,6 +1532,7 @@ export function ThreadDetail({
     lastScrollTopRef.current = top;
     if (
       scrolledUp &&
+      Date.now() >= suppressKbDismissRef.current &&
       typeof window !== "undefined" &&
       window.matchMedia("(pointer: coarse)").matches &&
       document.activeElement === textareaRef.current
@@ -2429,6 +2434,8 @@ export function ThreadDetail({
       return;
 
     stopTyping();
+    // Keep the keyboard up: ignore scroll-up dismiss during the send reflow.
+    suppressKbDismissRef.current = Date.now() + 800;
     forceScrollOnNextMessageRef.current = true;
     scrollToBottom("smooth");
     setUploading(true);
