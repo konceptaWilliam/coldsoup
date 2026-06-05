@@ -2771,7 +2771,7 @@ export function ThreadDetail({
       <div
         ref={scrollContainerRef}
         onScroll={updateScrollState}
-        className="flex-1 overflow-y-auto px-4 md:px-6 py-3 md:py-4"
+        className="flex-1 overflow-y-auto px-4 md:px-6 py-3 md:py-4 flex flex-col"
       >
         {isLoading ? (
           <div className="flex flex-col justify-end min-h-full space-y-4">
@@ -2785,13 +2785,15 @@ export function ThreadDetail({
               </div>
             ))}
           </div>
-        ) : displayMessages.length === 0 ? (
-          <div className="flex items-center justify-center h-32">
-            <p className="font-mono text-sm text-muted">
-              No messages yet. Start the conversation.
-            </p>
-          </div>
         ) : (
+          <div className="mt-auto">
+          {displayMessages.length === 0 ? (
+            <div className="flex items-center justify-center h-32">
+              <p className="font-mono text-sm text-muted">
+                No messages yet. Start the conversation.
+              </p>
+            </div>
+          ) : (
           <>
             {hasMore && (
               <div className="flex justify-center mb-4">
@@ -3353,8 +3355,10 @@ export function ThreadDetail({
               );
             })}
           </>
+          )}
+          <div ref={bottomRef} />
+          </div>
         )}
-        <div ref={bottomRef} />
       </div>
 
       {showDetails && (
@@ -3703,6 +3707,7 @@ export function ThreadDetail({
             <div className="relative flex-shrink-0">
               <button
                 type="button"
+                onMouseDown={(e) => e.preventDefault()}
                 onClick={() => setAttachMenuOpen((o) => !o)}
                 title="Attach or create poll"
                 className="h-11 w-11 md:h-10 md:w-10 flex items-center justify-center text-muted hover:text-pastel-ink transition-colors font-mono text-lg leading-none"
@@ -3750,6 +3755,7 @@ export function ThreadDetail({
             {/* Voice record */}
             <button
               type="button"
+              onMouseDown={(e) => e.preventDefault()}
               onClick={isRecording ? stopRecording : startRecording}
               title={isRecording ? "Stop recording" : "Record voice message"}
               className={`h-11 md:h-10 flex items-center justify-center flex-shrink-0 transition-colors ${
@@ -3790,10 +3796,10 @@ export function ThreadDetail({
               }}
             />
             <button
-              // Keep the textarea focused so the mobile keyboard stays open —
-              // preventing the default pointer-down stops the button stealing
-              // focus (a programmatic refocus won't reopen the keyboard).
-              onPointerDown={(e) => e.preventDefault()}
+              // Keep the textarea focused so the mobile keyboard stays open.
+              // iOS fires (and focuses on) mousedown — preventing its default
+              // stops the button stealing focus, so the input never blurs.
+              onMouseDown={(e) => e.preventDefault()}
               onClick={handleSend}
               disabled={!canSend}
               className={`h-11 md:h-10 px-4 flex-shrink-0 font-mono text-[11px] uppercase tracking-[0.1em] border-none transition-all duration-200 ${
