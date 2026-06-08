@@ -34,19 +34,24 @@ function systemScheme(): Scheme {
     : "light";
 }
 
+function storedMode(): ThemeMode {
+  if (typeof window === "undefined") return "system";
+  try {
+    const stored = localStorage.getItem(KEY);
+    if (stored === "light" || stored === "dark" || stored === "system") {
+      return stored;
+    }
+  } catch {}
+  return "system";
+}
+
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [mode, setModeState] = useState<ThemeMode>("system");
-  const [system, setSystem] = useState<Scheme>("light");
+  // Initialize synchronously from storage so the first scheme effect never
+  // clobbers the pre-paint theme back to light for a frame.
+  const [mode, setModeState] = useState<ThemeMode>(storedMode);
+  const [system, setSystem] = useState<Scheme>(systemScheme);
 
   useEffect(() => {
-    setSystem(systemScheme());
-    try {
-      const stored = localStorage.getItem(KEY);
-      if (stored === "light" || stored === "dark" || stored === "system") {
-        setModeState(stored);
-      }
-    } catch {}
-
     const media = window.matchMedia("(prefers-color-scheme: dark)");
     const onChange = () => setSystem(systemScheme());
     media.addEventListener("change", onChange);

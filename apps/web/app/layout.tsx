@@ -41,7 +41,17 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="h-full">
+    <html lang="en" className="h-full" suppressHydrationWarning>
+      <head>
+        {/* Set the theme before first paint to avoid a light-mode flash on
+            load / navigation / bfcache restore. Mirrors ThemeProvider's logic
+            and the `coldsoup:themeMode` key. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){try{var m=localStorage.getItem('coldsoup:themeMode');var d=m==='dark'||((m==='system'||!m)&&window.matchMedia('(prefers-color-scheme: dark)').matches);var s=d?'dark':'light';document.documentElement.dataset.theme=s;document.documentElement.style.colorScheme=s;}catch(e){}})();`,
+          }}
+        />
+      </head>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased h-full bg-surface text-ink`}
       >

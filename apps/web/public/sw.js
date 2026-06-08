@@ -2,6 +2,15 @@
 
 const MEDIA_CACHE = "coldsoup-media-v1";
 
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(base64);
+  const arr = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+  return arr;
+}
+
 self.addEventListener("install", () => {
   self.skipWaiting();
 });
@@ -72,6 +81,60 @@ self.addEventListener("push", (event) => {
         } catch (e) {
           // Badging unsupported / failed — ignore.
         }
+      }
+    })()
+  );
+});
+
+// The push service rotates/expires subscriptions on its own. Without handling
+// this, getSubscription() silently returns null and the user's toggle flips to
+// OFF until they manually re-enable. Re-subscribe and tell the server.
+self.addEventListener("pushsubscriptionchange", (event) => {
+  event.waitUntil(
+    (async () => {
+      const oldEndpoint = event.oldSubscription && event.oldSubscription.endpoint;
+
+      // Prefer the old subscription's key; fall back to the server-provided
+      // VAPID public key (some browsers don't expose oldSubscription).
+      let applicationServerKey =
+        event.oldSubscription &&
+        event.oldSubscription.options &&
+        event.oldSubscription.options.applicationServerKey;
+      if (!applicationServerKey) {
+        try {
+          const res = await fetch("/api/push/key");
+          const key = (await res.text()).trim();
+          if (!key) return;
+          applicationServerKey = urlBase64ToUint8Array(key);
+        } catch (e) {
+          return;
+        }
+      }
+
+      let sub;
+      try {
+        sub = await self.registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey,
+        });
+      } catch (e) {
+        return;
+      }
+
+      const json = sub.toJSON();
+      try {
+        await fetch("/api/push/resubscribe", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            endpoint: json.endpoint,
+            keys: json.keys,
+            oldEndpoint,
+          }),
+        });
+      } catch (e) {
+        // Server unreachable — the local subscription still exists; a later
+        // app open will reconcile.
       }
     })()
   );

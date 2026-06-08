@@ -49,7 +49,23 @@ export function WebPushToggle() {
       }
       const reg = await navigator.serviceWorker.ready;
       const sub = await reg.pushManager.getSubscription();
-      if (!cancelled) setState(sub ? "on" : "off");
+      if (cancelled) return;
+      setState(sub ? "on" : "off");
+      // Reconcile: make sure the server still knows this browser's current
+      // subscription. Covers the case where the push service rotated the sub
+      // and the SW's re-register POST didn't reach the server.
+      if (sub) {
+        const json = sub.toJSON();
+        if (json.endpoint && json.keys?.p256dh && json.keys?.auth) {
+          subscribeMut
+            .mutateAsync({
+              endpoint: json.endpoint,
+              keys: { p256dh: json.keys.p256dh, auth: json.keys.auth },
+              userAgent: navigator.userAgent,
+            })
+            .catch(() => null);
+        }
+      }
     })();
     return () => {
       cancelled = true;
