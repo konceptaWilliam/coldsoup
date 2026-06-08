@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { Sidebar } from "@/components/sidebar";
 import { SwipeToOpenSidebar } from "@/components/swipe-to-open-sidebar";
 import { IntroOverlay } from "@/components/intro-overlay";
+import { NotificationNudge } from "@/components/notification-nudge";
 import { UnreadProvider } from "@/lib/unread-context";
 import { MobileSidebarProvider } from "@/lib/mobile-sidebar-context";
 
@@ -53,6 +54,7 @@ export default async function GroupLayout({
           <SwipeToOpenSidebar>{children}</SwipeToOpenSidebar>
         </div>
         <IntroOverlay seen={!!(profile as { intro_seen?: boolean }).intro_seen} />
+        <NotificationNudge />
       </MobileSidebarProvider>
     </UnreadProvider>
   );
