@@ -1519,6 +1519,13 @@ export function ThreadDetail({
   const retryFailedRef = useRef<(entry: FailedEntry) => void>(() => {});
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const longPressStartRef = useRef<{ x: number; y: number } | null>(null);
+  // True while a programmatic (auto/smooth) scroll is settling. Scroll events it
+  // emits must NOT be read as a user scroll-up (which would blur the composer and
+  // close the soft keyboard right after sending).
+  const isProgrammaticScrollRef = useRef(false);
+  const programmaticScrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
   // Swipe-right-to-reply gesture state (touch only).
   const swipeRef = useRef<{
     id: string;
@@ -1559,9 +1566,22 @@ export function ThreadDetail({
   );
 
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
+    // Flag the scroll as programmatic so updateScrollState ignores the events it
+    // produces. Cleared when the scroll settles (timeout — `scrollend` isn't
+    // universal); "auto" jumps are near-instant, "smooth" needs longer.
+    isProgrammaticScrollRef.current = true;
+    if (programmaticScrollTimerRef.current) {
+      clearTimeout(programmaticScrollTimerRef.current);
+    }
     bottomRef.current?.scrollIntoView({ behavior });
     isNearBottomRef.current = true;
     setHasNewMessages(false);
+    programmaticScrollTimerRef.current = setTimeout(
+      () => {
+        isProgrammaticScrollRef.current = false;
+      },
+      behavior === "auto" ? 120 : 700,
+    );
   }, []);
 
   const updateScrollState = useCallback(() => {
@@ -1575,6 +1595,9 @@ export function ThreadDetail({
     lastScrollTopRef.current = top;
     if (
       scrolledUp &&
+      // Ignore scrolls our own auto/smooth scroll produced (e.g. the post-send
+      // reflow) — only a real user scroll-up should dismiss the keyboard.
+      !isProgrammaticScrollRef.current &&
       Date.now() >= suppressKbDismissRef.current &&
       typeof window !== "undefined" &&
       window.matchMedia("(pointer: coarse)").matches &&
@@ -1612,6 +1635,9 @@ export function ThreadDetail({
   useEffect(() => {
     return () => {
       if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+      if (programmaticScrollTimerRef.current) {
+        clearTimeout(programmaticScrollTimerRef.current);
+      }
     };
   }, []);
 
