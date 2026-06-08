@@ -1542,6 +1542,11 @@ export function ThreadDetail({
   const programmaticScrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
+  // True only while the user is physically dragging the message list (finger
+  // down + a short momentum tail). Layout-induced scrolls (keyboard show,
+  // reflow after send) have no touch, so they must never dismiss the keyboard.
+  const userScrollingRef = useRef(false);
+  const userScrollClearRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Swipe-right-to-reply gesture state (touch only).
   const swipeRef = useRef<{
     id: string;
@@ -1611,8 +1616,10 @@ export function ThreadDetail({
     lastScrollTopRef.current = top;
     if (
       scrolledUp &&
-      // Ignore scrolls our own auto/smooth scroll produced (e.g. the post-send
-      // reflow) — only a real user scroll-up should dismiss the keyboard.
+      // Only a real finger-drag dismisses the keyboard. Programmatic scrolls
+      // and layout-induced scrolls (keyboard show / post-send reflow) have no
+      // active touch, so they're excluded here.
+      userScrollingRef.current &&
       !isProgrammaticScrollRef.current &&
       Date.now() >= suppressKbDismissRef.current &&
       typeof window !== "undefined" &&
@@ -1655,6 +1662,7 @@ export function ThreadDetail({
       if (programmaticScrollTimerRef.current) {
         clearTimeout(programmaticScrollTimerRef.current);
       }
+      if (userScrollClearRef.current) clearTimeout(userScrollClearRef.current);
     };
   }, []);
 
@@ -3035,6 +3043,17 @@ export function ThreadDetail({
       <div
         ref={scrollContainerRef}
         onScroll={updateScrollState}
+        onTouchStart={() => {
+          if (userScrollClearRef.current) clearTimeout(userScrollClearRef.current);
+          userScrollingRef.current = true;
+        }}
+        onTouchEnd={() => {
+          // Keep it true through iOS momentum scrolling, then release.
+          if (userScrollClearRef.current) clearTimeout(userScrollClearRef.current);
+          userScrollClearRef.current = setTimeout(() => {
+            userScrollingRef.current = false;
+          }, 350);
+        }}
         className="flex-1 overflow-y-auto px-4 md:px-6 py-3 md:py-4 flex flex-col"
       >
         {isLoading ? (
