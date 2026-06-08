@@ -1495,6 +1495,22 @@ export function ThreadDetail({
   const [hasMore, setHasMore] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [hasNewMessages, setHasNewMessages] = useState(false);
+  // On-screen debug log (no desktop devtools needed): append `?kbdebug` to the
+  // URL to see what blurs the composer on the phone.
+  const [kbDebug] = useState(
+    () =>
+      typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).has("kbdebug"),
+  );
+  const [dbgLines, setDbgLines] = useState<string[]>([]);
+  const pushDbg = useCallback(
+    (line: string) => {
+      if (!kbDebug) return;
+      const t = new Date().toLocaleTimeString("en", { hour12: false });
+      setDbgLines((prev) => [`${t} ${line}`, ...prev].slice(0, 14));
+    },
+    [kbDebug],
+  );
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const prevMsgCountRef = useRef(0);
@@ -1603,13 +1619,14 @@ export function ThreadDetail({
       window.matchMedia("(pointer: coarse)").matches &&
       document.activeElement === textareaRef.current
     ) {
+      pushDbg("blur cause=scroll-up");
       textareaRef.current?.blur();
     }
 
     const isNearBottom = isScrolledNearBottom(container);
     isNearBottomRef.current = isNearBottom;
     if (isNearBottom) setHasNewMessages(false);
-  }, []);
+  }, [pushDbg]);
 
   useEffect(() => {
     markRead(threadId, groupId);
@@ -2573,6 +2590,7 @@ export function ThreadDetail({
     )
       return;
 
+    pushDbg(`send tap (files=${pendingFiles.length})`);
     stopTyping();
     // Keep the keyboard up: ignore scroll-up dismiss during the send reflow.
     suppressKbDismissRef.current = Date.now() + 800;
@@ -2600,6 +2618,15 @@ export function ThreadDetail({
       setReplyingTo(null);
       setMentionQuery(null);
       textareaRef.current?.focus();
+      if (kbDebug) {
+        setTimeout(
+          () =>
+            pushDbg(
+              `after focus: active=${(document.activeElement as HTMLElement | null)?.tagName ?? "null"}`,
+            ),
+          60,
+        );
+      }
     } catch {
       forceScrollOnNextMessageRef.current = false;
       setUploadError("Upload failed. Try again.");
@@ -4040,12 +4067,28 @@ export function ThreadDetail({
                 t.style.height = "auto";
                 t.style.height = `${Math.min(t.scrollHeight, 160)}px`;
               }}
+              onBlur={(e) => {
+                if (!kbDebug) return;
+                const rt = e.relatedTarget as HTMLElement | null;
+                pushDbg(
+                  `BLUR rt=${rt ? rt.tagName + (rt.getAttribute("aria-label") ? `[${rt.getAttribute("aria-label")}]` : "") : "null"}`,
+                );
+                setTimeout(
+                  () =>
+                    pushDbg(
+                      `  →active=${(document.activeElement as HTMLElement | null)?.tagName ?? "null"}`,
+                    ),
+                  0,
+                );
+              }}
             />
             <button
               // Keep the textarea focused so the mobile keyboard stays open.
-              // iOS fires (and focuses on) mousedown — preventing its default
-              // stops the button stealing focus, so the input never blurs.
+              // iOS fires (and focuses on) mousedown/pointerdown — preventing
+              // their default stops the button stealing focus, so the input
+              // never blurs. (preventDefault here doesn't cancel the click.)
               onMouseDown={(e) => e.preventDefault()}
+              onPointerDown={(e) => e.preventDefault()}
               onClick={handleSend}
               disabled={!canSend}
               className={`h-11 md:h-10 px-4 flex-shrink-0 font-mono text-[11px] uppercase tracking-[0.1em] border-none transition-all duration-200 ${
@@ -4087,6 +4130,22 @@ export function ThreadDetail({
           </div>
         )}
       </div>
+
+      {kbDebug && (
+        <div className="fixed top-2 left-2 right-2 z-[200] max-h-[40vh] overflow-y-auto border border-red-400 bg-black/85 p-2 font-mono text-[10px] leading-tight text-green-300 pointer-events-auto">
+          <div className="flex items-center justify-between text-red-300">
+            <span>kbdebug · active={typeof document !== "undefined" ? (document.activeElement as HTMLElement | null)?.tagName ?? "?" : "?"}</span>
+            <button onClick={() => setDbgLines([])} className="text-red-300 underline">
+              clear
+            </button>
+          </div>
+          {dbgLines.map((l, i) => (
+            <div key={i} className="whitespace-pre">
+              {l}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
