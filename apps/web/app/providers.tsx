@@ -112,24 +112,25 @@ export function Providers({ children }: { children: React.ReactNode }) {
 
   return (
     <ThemeProvider>
-      <PresenceProvider>
-        <trpc.Provider client={trpcClient} queryClient={queryClient}>
-          <PersistQueryClientProvider
-            client={queryClient}
-            persistOptions={{
-              persister,
-              maxAge: WEEK,
-              buster: CACHE_BUSTER,
-              dehydrateOptions: {
-                shouldDehydrateQuery: (q) => q.state.status === "success",
-              },
-            }}
-          >
+      <trpc.Provider client={trpcClient} queryClient={queryClient}>
+        <PersistQueryClientProvider
+          client={queryClient}
+          persistOptions={{
+            persister,
+            maxAge: WEEK,
+            buster: CACHE_BUSTER,
+            dehydrateOptions: {
+              shouldDehydrateQuery: (q) => q.state.status === "success",
+            },
+          }}
+        >
+          {/* Inside trpc.Provider: PresenceProvider calls profile.heartbeat. */}
+          <PresenceProvider>
             {children}
             <PwaManager />
-          </PersistQueryClientProvider>
-        </trpc.Provider>
-      </PresenceProvider>
+          </PresenceProvider>
+        </PersistQueryClientProvider>
+      </trpc.Provider>
     </ThemeProvider>
   );
 }

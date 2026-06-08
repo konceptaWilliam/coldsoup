@@ -32,17 +32,21 @@ type Reaction = {
   users: string[];
 };
 
+type ReactionType = "👍" | "👎" | "❤️" | "🎉" | "😂" | "❓";
+const REACTION_TYPES: ReactionType[] = ["👍", "👎", "❤️", "🎉", "😂", "❓"];
+
 type ReplyTo = {
   id: string;
   body: string;
   author_name: string;
 };
 
-const REACTION_DEFAULTS: Reaction[] = [
-  { type: "👍", count: 0, userReacted: false, users: [] },
-  { type: "👎", count: 0, userReacted: false, users: [] },
-  { type: "❓", count: 0, userReacted: false, users: [] },
-];
+const REACTION_DEFAULTS: Reaction[] = REACTION_TYPES.map((type) => ({
+  type,
+  count: 0,
+  userReacted: false,
+  users: [],
+}));
 
 type PollVoter = {
   id: string;
@@ -72,6 +76,7 @@ type Message = {
   is_deleted: boolean;
   user_id: string | null;
   thread_id: string;
+  client_id?: string | null;
   poll_id: string | null;
   poll: PollData | null;
   smeter_id: string | null;
@@ -92,6 +97,7 @@ type Message = {
 
 type FailedEntry = {
   failId: string;
+  clientId: string;
   body: string;
   attachments: Attachment[];
   replyToId?: string;
@@ -787,6 +793,18 @@ function Avatar({
   );
 }
 
+function formatLastSeen(iso: string): string {
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diffMs / 60_000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d ago`;
+  return new Date(iso).toLocaleDateString("en", { month: "short", day: "numeric" });
+}
+
 function ProfileCard({
   target,
   onClose,
@@ -795,8 +813,12 @@ function ProfileCard({
   onClose: () => void;
 }) {
   const { isOnline } = useOnline();
+  const online = isOnline(target?.id);
+  const { data: lastSeen } = trpc.profile.lastSeen.useQuery(
+    { userId: target?.id ?? "" },
+    { enabled: !!target?.id && !online },
+  );
   if (!target) return null;
-  const online = isOnline(target.id);
 
   return (
     <div
@@ -820,12 +842,16 @@ function ProfileCard({
         <p className="mt-4 text-base font-semibold text-ink break-words">
           {target.name}
         </p>
-        {online && (
+        {online ? (
           <p className="mt-2 inline-flex items-center gap-1.5 font-mono text-[11px] text-online uppercase tracking-[0.08em]">
             <span className="w-2 h-2 rounded-full bg-online" />
             online
           </p>
-        )}
+        ) : lastSeen?.lastSeenAt ? (
+          <p className="mt-2 font-mono text-[11px] text-muted uppercase tracking-[0.08em]">
+            last seen {formatLastSeen(lastSeen.lastSeenAt)}
+          </p>
+        ) : null}
       </div>
     </div>
   );
@@ -1482,8 +1508,25 @@ export function ThreadDetail({
   // keyboard) on touch devices.
   const suppressKbDismissRef = useRef(0);
   const isInitialLoad = useRef(true);
+  // True once the realtime channel has joined at least once; lets us tell a
+  // reconnect apart from the initial subscribe so we only backfill on reconnect.
+  const hasSubscribedRef = useRef(false);
+  // Throttle typing presence: only broadcast typing:true on the leading edge.
+  const typingActiveRef = useRef(false);
+  // Latest outbox + retry fn in refs so the "online" listener (bound once) can
+  // flush without re-binding on every state change.
+  const failedSendsRef = useRef<FailedEntry[]>([]);
+  const retryFailedRef = useRef<(entry: FailedEntry) => void>(() => {});
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const longPressStartRef = useRef<{ x: number; y: number } | null>(null);
+  // Swipe-right-to-reply gesture state (touch only).
+  const swipeRef = useRef<{
+    id: string;
+    x: number;
+    y: number;
+    locked: number;
+    el: HTMLElement;
+  } | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const composerRef = useRef<HTMLDivElement>(null);
@@ -1612,6 +1655,17 @@ export function ThreadDetail({
     writeOutbox(threadId, failedSends);
   }, [failedSends, threadId]);
 
+  // Auto-flush the outbox when connectivity returns — local-first: queue while
+  // offline, resend on reconnect (no manual retry needed).
+  useEffect(() => {
+    const onOnline = () => {
+      const entries = failedSendsRef.current;
+      entries.forEach((entry) => retryFailedRef.current(entry));
+    };
+    window.addEventListener("online", onOnline);
+    return () => window.removeEventListener("online", onOnline);
+  }, []);
+
   const createPoll = trpc.polls.create.useMutation({
     onSuccess: (msg) => {
       haptic("light");
@@ -1625,11 +1679,7 @@ export function ThreadDetail({
           smeter_id: null,
           smeter: null,
           system_event: null,
-          reactions: [
-            { type: "👍", count: 0, userReacted: false, users: [] },
-            { type: "👎", count: 0, userReacted: false, users: [] },
-            { type: "❓", count: 0, userReacted: false, users: [] },
-          ],
+          reactions: REACTION_DEFAULTS.map((r) => ({ ...r })),
           reply_to: null,
         },
       ]);
@@ -1665,11 +1715,7 @@ export function ThreadDetail({
                 smeter_id: smeterId,
                 smeter,
                 system_event: null,
-                reactions: [
-                  { type: "👍", count: 0, userReacted: false, users: [] },
-                  { type: "👎", count: 0, userReacted: false, users: [] },
-                  { type: "❓", count: 0, userReacted: false, users: [] },
-                ],
+                reactions: REACTION_DEFAULTS.map((r) => ({ ...r })),
                 reply_to: null,
               },
             ]
@@ -1745,6 +1791,12 @@ export function ThreadDetail({
     { refetchOnWindowFocus: false, staleTime: 5 * 60 * 1000 },
   );
 
+  // Latest members in a ref so the realtime INSERT handler can resolve a
+  // sender's profile locally (no per-message DB round-trip) without re-binding
+  // the channel on every member-list change.
+  const membersRef = useRef(workspaceMembers);
+  membersRef.current = workspaceMembers;
+
   const mentionSuggestions = useMemo(() => {
     if (mentionQuery === null || !workspaceMembers) return [];
     const q = mentionQuery.toLowerCase();
@@ -1771,7 +1823,20 @@ export function ThreadDetail({
       };
       // Mark the loaded batch as no-animate so it renders instantly.
       for (const m of msgs) noAnimateIds.current.add(m.id);
-      setMessages(msgs);
+      // Merge: keep any still-pending optimistic sends that the server batch
+      // doesn't yet include (a refetch/backfill must not drop in-flight temps).
+      setMessages((prev) => {
+        const pending = prev.filter(
+          (m) =>
+            m.delivery_status === "sending" &&
+            !msgs.some(
+              (s) =>
+                s.id === m.id ||
+                (!!m.client_id && s.client_id === m.client_id),
+            ),
+        );
+        return pending.length ? [...msgs, ...pending] : msgs;
+      });
       setHasMore(more);
     }
   }, [loadedMessages]);
@@ -1969,6 +2034,7 @@ export function ThreadDetail({
           event: "INSERT",
           schema: "public",
           table: "messages",
+          filter: `thread_id=eq.${threadId}`,
         },
         async (payload) => {
           const newMsg = payload.new as {
@@ -1979,6 +2045,7 @@ export function ThreadDetail({
             is_deleted: boolean;
             user_id: string;
             thread_id: string;
+            client_id: string | null;
             attachments: Attachment[];
             reply_to_id: string | null;
             poll_id: string | null;
@@ -1986,15 +2053,26 @@ export function ThreadDetail({
             system_event: SystemEvent | null;
           };
 
-          // Server-side postgres_changes filters silently drop events here,
-          // so subscribe table-wide and filter by thread client-side.
+          // Defense-in-depth: the server-side filter already scopes to this
+          // thread, but keep the guard in case the binding falls back to
+          // table-wide delivery.
           if (newMsg.thread_id !== threadId) return;
 
-          const { data: profile } = await supabase
-            .from("profiles")
-            .select("id, display_name, avatar_url")
-            .eq("id", newMsg.user_id)
-            .single();
+          // Resolve the sender locally from the cached group members — avoids a
+          // DB round-trip per incoming message (the previous hot path). Fall
+          // back to a query only when the sender isn't in the cache yet.
+          let profile:
+            | { id: string; display_name: string; avatar_url: string | null }
+            | null =
+            membersRef.current?.find((m) => m.id === newMsg.user_id) ?? null;
+          if (!profile) {
+            const { data } = await supabase
+              .from("profiles")
+              .select("id, display_name, avatar_url")
+              .eq("id", newMsg.user_id)
+              .single();
+            profile = data ?? null;
+          }
 
           // Poll messages carry no poll payload in the row — fetch it so the
           // poll renders live instead of appearing blank until refresh.
@@ -2048,17 +2126,20 @@ export function ThreadDetail({
               smeter,
               system_event: (newMsg.system_event ?? null) as SystemEvent | null,
               profiles: profile ?? null,
-              reactions: REACTION_DEFAULTS,
+              reactions: REACTION_DEFAULTS.map((r) => ({ ...r })),
               reply_to,
             };
             // If this is the realtime echo of our own optimistic message,
-            // replace the pending temp instead of appending a duplicate.
-            const tempIdx = prev.findIndex(
-              (m) =>
-                m.delivery_status &&
-                m.user_id === newMsg.user_id &&
-                m.body === newMsg.body &&
-                (m.reply_to_id ?? null) === (newMsg.reply_to_id ?? null),
+            // replace the pending temp instead of appending a duplicate. Match
+            // on the client_id (deterministic) and fall back to the old
+            // body+user heuristic for messages sent before client_id existed.
+            const tempIdx = prev.findIndex((m) =>
+              m.delivery_status && newMsg.client_id
+                ? m.client_id === newMsg.client_id
+                : m.delivery_status &&
+                  m.user_id === newMsg.user_id &&
+                  m.body === newMsg.body &&
+                  (m.reply_to_id ?? null) === (newMsg.reply_to_id ?? null),
             );
             if (tempIdx !== -1) {
               const copy = [...prev];
@@ -2090,6 +2171,7 @@ export function ThreadDetail({
           event: "UPDATE",
           schema: "public",
           table: "messages",
+          filter: `thread_id=eq.${threadId}`,
         },
         (payload) => {
           const updated = payload.new as {
@@ -2127,11 +2209,34 @@ export function ThreadDetail({
           utils.threads.reads.invalidate({ threadId });
         },
       )
-      .subscribe();
+      .subscribe((status) => {
+        // On a reconnect (not the first SUBSCRIBED), refetch to backfill any
+        // messages that landed while the socket was down. The merge in the
+        // messages.list effect preserves still-pending optimistic sends.
+        if (status === "SUBSCRIBED") {
+          if (hasSubscribedRef.current) {
+            utils.messages.list.invalidate({ threadId });
+            utils.threads.reads.invalidate({ threadId });
+          }
+          hasSubscribedRef.current = true;
+        }
+      });
     })();
+
+    // Returning to a backgrounded tab can miss realtime events; refetch on
+    // visibility so the thread is never silently stale.
+    const onVisible = () => {
+      if (document.visibilityState === "visible") {
+        utils.messages.list.invalidate({ threadId });
+        utils.threads.reads.invalidate({ threadId });
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
 
     return () => {
       cancelled = true;
+      document.removeEventListener("visibilitychange", onVisible);
+      hasSubscribedRef.current = false;
       if (channel) supabase.removeChannel(channel);
     };
   }, [threadId, utils.threads.reads]);
@@ -2166,6 +2271,7 @@ export function ThreadDetail({
     onMutate: (vars) => {
       haptic("light");
       const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      const clientId = vars.clientId ?? tempId;
       const messageBody = vars.body ?? "";
       const replyTo =
         vars.replyToId
@@ -2195,6 +2301,7 @@ export function ThreadDetail({
         is_deleted: false,
         user_id: myInfo?.id ?? null,
         thread_id: threadId,
+        client_id: clientId,
         poll_id: null,
         poll: null,
         smeter_id: null,
@@ -2215,6 +2322,7 @@ export function ThreadDetail({
       };
       const failed: FailedEntry = {
         failId: tempId,
+        clientId,
         body: messageBody,
         attachments: vars.attachments ?? [],
         replyToId: vars.replyToId,
@@ -2311,6 +2419,7 @@ export function ThreadDetail({
 
   function stopTyping() {
     if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+    typingActiveRef.current = false;
     if (presenceChannelRef.current && myInfo) {
       presenceChannelRef.current.track({
         display_name: myInfo.display_name,
@@ -2362,11 +2471,16 @@ export function ThreadDetail({
     }
 
     if (presenceChannelRef.current && myInfo) {
-      presenceChannelRef.current.track({
-        display_name: myInfo.display_name,
-        typing: true,
-        at: Date.now(),
-      });
+      // Leading-edge only: broadcast typing:true once, then let the 3s timeout
+      // clear it — instead of a presence update on every keystroke.
+      if (!typingActiveRef.current) {
+        typingActiveRef.current = true;
+        presenceChannelRef.current.track({
+          display_name: myInfo.display_name,
+          typing: true,
+          at: Date.now(),
+        });
+      }
       if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
       typingTimeoutRef.current = setTimeout(stopTyping, 3000);
     }
@@ -2451,6 +2565,7 @@ export function ThreadDetail({
         body: body.trim(),
         attachments,
         replyToId: replyingTo?.id,
+        clientId: crypto.randomUUID(),
       });
       if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
       clearDraft(threadId);
@@ -2537,6 +2652,73 @@ export function ThreadDetail({
     if (dx > 10 || dy > 10) clearLongPressTimer();
   }
 
+  // --- Swipe-right-to-reply (touch) ---
+  const SWIPE_MAX = 72;
+  const SWIPE_TRIGGER = 48;
+
+  function onMsgSwipeStart(
+    e: React.TouchEvent<HTMLDivElement>,
+    message: Message,
+  ) {
+    if (!window.matchMedia("(pointer: coarse)").matches) return;
+    if (message.is_deleted || message.delivery_status) return;
+    const t = e.touches[0];
+    if (!t) return;
+    swipeRef.current = {
+      id: message.id,
+      x: t.clientX,
+      y: t.clientY,
+      locked: 0,
+      el: e.currentTarget,
+    };
+  }
+
+  function onMsgSwipeMove(
+    e: React.TouchEvent<HTMLDivElement>,
+    message: Message,
+  ) {
+    const s = swipeRef.current;
+    if (!s || s.id !== message.id) return;
+    const t = e.touches[0];
+    if (!t) return;
+    const dx = t.clientX - s.x;
+    const dy = t.clientY - s.y;
+    if (s.locked === 0) {
+      // Decide axis on first meaningful move; vertical => let the list scroll.
+      if (Math.abs(dy) > Math.abs(dx)) {
+        swipeRef.current = null;
+        return;
+      }
+      if (Math.abs(dx) > 8) s.locked = dx > 0 ? 1 : -1;
+      else return;
+    }
+    if (s.locked === 1) {
+      const off = Math.max(0, Math.min(dx, SWIPE_MAX));
+      s.el.style.transition = "none";
+      s.el.style.transform = `translateX(${off}px)`;
+    }
+  }
+
+  function onMsgSwipeEnd(
+    e: React.TouchEvent<HTMLDivElement>,
+    message: Message,
+    name: string,
+  ) {
+    const s = swipeRef.current;
+    swipeRef.current = null;
+    if (!s || s.id !== message.id) return;
+    const el = s.el;
+    const match = /translateX\(([0-9.]+)px\)/.exec(el.style.transform);
+    const off = match ? parseFloat(match[1]) : 0;
+    el.style.transition = "transform 180ms ease";
+    el.style.transform = "";
+    if (s.locked === 1 && off >= SWIPE_TRIGGER) {
+      haptic("light");
+      setReplyingTo({ id: message.id, body: message.body, authorName: name });
+      textareaRef.current?.focus();
+    }
+  }
+
   function openMessageMenuFromContext(
     e: React.MouseEvent<HTMLDivElement>,
     message: Message,
@@ -2584,8 +2766,14 @@ export function ThreadDetail({
       body: entry.body,
       attachments: entry.attachments,
       replyToId: entry.replyToId,
+      // Reuse the original client_id so a retry that the server actually
+      // persisted on the first (timed-out) attempt dedupes instead of doubling.
+      clientId: entry.clientId,
     });
   }
+
+  retryFailedRef.current = retryFailed;
+  failedSendsRef.current = failedSends;
 
   function dismissFailed(failId: string) {
     setFailedSends((prev) => prev.filter((f) => f.failId !== failId));
@@ -2718,6 +2906,8 @@ export function ThreadDetail({
     !uploading;
 
   const members = workspaceMembers ?? [];
+  // Past this size, enable content-visibility windowing on message rows.
+  const bigThread = displayMessages.length > 60;
 
   return (
     <div
@@ -2868,6 +3058,12 @@ export function ThreadDetail({
                         style={{
                           marginTop: isSameAuthor ? 2 : 14,
                           WebkitTouchCallout: "none",
+                          // In long threads, let the browser skip layout/paint
+                          // for off-screen rows (kept in the DOM, so reply-jump
+                          // and highlight via getElementById still work).
+                          contentVisibility:
+                            bigThread ? "auto" : undefined,
+                          containIntrinsicSize: bigThread ? "auto 56px" : undefined,
                           userSelect:
                             activeMessageMenuId === msg.id ? "none" : undefined,
                           animation: (() => {
@@ -2887,6 +3083,10 @@ export function ThreadDetail({
                         onPointerCancel={clearLongPressTimer}
                         onPointerLeave={clearLongPressTimer}
                         onContextMenu={(e) => openMessageMenuFromContext(e, msg)}
+                        onTouchStart={(e) => onMsgSwipeStart(e, msg)}
+                        onTouchMove={(e) => onMsgSwipeMove(e, msg)}
+                        onTouchEnd={(e) => onMsgSwipeEnd(e, msg, name)}
+                        onTouchCancel={(e) => onMsgSwipeEnd(e, msg, name)}
                         onMouseEnter={(e) => {
                           if (!window.matchMedia("(hover: hover)").matches) return;
                           const actions =
@@ -3116,7 +3316,7 @@ export function ThreadDetail({
                                 )}
 
                                 {/* Reaction buttons */}
-                                {(["👍", "👎", "❓"] as const).map((emoji) => (
+                                {REACTION_TYPES.map((emoji) => (
                                   <button
                                     key={emoji}
                                     onClick={() =>
@@ -3264,10 +3464,7 @@ export function ThreadDetail({
                                           onClick={() =>
                                             toggleReaction.mutate({
                                               messageId: msg.id,
-                                              type: r.type as
-                                                | "👍"
-                                                | "👎"
-                                                | "❓",
+                                              type: r.type as ReactionType,
                                             })
                                           }
                                           onMouseEnter={() =>

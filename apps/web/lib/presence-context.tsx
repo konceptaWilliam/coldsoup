@@ -10,6 +10,9 @@ import {
 } from "react";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/client";
+import { trpc } from "@/lib/trpc/client";
+
+const HEARTBEAT_MS = 2 * 60 * 1000;
 
 const CHANNEL = "presence:online";
 
@@ -27,16 +30,25 @@ export function PresenceProvider({ children }: { children: ReactNode }) {
   const [onlineIds, setOnlineIds] = useState<Set<string>>(new Set());
   const channelRef = useRef<RealtimeChannel | null>(null);
   const userIdRef = useRef<string | null>(null);
+  const heartbeat = trpc.profile.heartbeat.useMutation();
+  const heartbeatRef = useRef(heartbeat);
+  heartbeatRef.current = heartbeat;
 
   useEffect(() => {
     let mounted = true;
     const supabase = createClient();
+    let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+
+    function beat() {
+      heartbeatRef.current.mutate();
+    }
 
     function trackVisible() {
       const channel = channelRef.current;
       if (!channel || !userIdRef.current) return;
       if (document.visibilityState === "visible") {
         channel.track({ online_at: Date.now() });
+        beat();
       } else {
         channel.untrack();
       }
@@ -59,6 +71,10 @@ export function PresenceProvider({ children }: { children: ReactNode }) {
         });
 
       channelRef.current = channel;
+      beat();
+      heartbeatTimer = setInterval(() => {
+        if (document.visibilityState === "visible") beat();
+      }, HEARTBEAT_MS);
     });
 
     document.addEventListener("visibilitychange", trackVisible);
@@ -67,6 +83,7 @@ export function PresenceProvider({ children }: { children: ReactNode }) {
 
     return () => {
       mounted = false;
+      if (heartbeatTimer) clearInterval(heartbeatTimer);
       document.removeEventListener("visibilitychange", trackVisible);
       window.removeEventListener("focus", trackVisible);
       window.removeEventListener("blur", trackVisible);

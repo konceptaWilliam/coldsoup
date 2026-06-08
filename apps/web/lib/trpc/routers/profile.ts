@@ -74,6 +74,39 @@ export const profileRouter = router({
       return { success: true };
     }),
 
+  // Presence heartbeat — bumps last_seen_at so other users can see "last seen
+  // X" once this user goes offline. Called periodically by PresenceProvider.
+  heartbeat: protectedProcedure.mutation(async ({ ctx }) => {
+    const { profile } = ctx;
+    const admin = createAdminClient();
+    await admin
+      .from("profiles")
+      .update({ last_seen_at: new Date().toISOString() })
+      .eq("id", profile.id);
+    return { success: true };
+  }),
+
+  lastSeen: protectedProcedure
+    .input(z.object({ userId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const admin = createAdminClient();
+      // Only expose last-seen for users who share a group with the caller.
+      const [{ data: mine }, { data: theirs }] = await Promise.all([
+        admin.from("group_memberships").select("group_id").eq("user_id", ctx.profile.id),
+        admin.from("group_memberships").select("group_id").eq("user_id", input.userId),
+      ]);
+      const myGroups = new Set((mine ?? []).map((r) => r.group_id as string));
+      const shares = (theirs ?? []).some((r) => myGroups.has(r.group_id as string));
+      if (!shares) return { lastSeenAt: null };
+
+      const { data } = await admin
+        .from("profiles")
+        .select("last_seen_at")
+        .eq("id", input.userId)
+        .maybeSingle();
+      return { lastSeenAt: (data?.last_seen_at as string | null) ?? null };
+    }),
+
   markIntroSeen: protectedProcedure.mutation(async ({ ctx }) => {
     const { profile } = ctx;
     const admin = createAdminClient();

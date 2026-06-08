@@ -30,7 +30,7 @@ function validateAttachmentUrl(url: string): boolean {
   }
 }
 
-const REACTION_TYPES = ["👍", "👎", "❓"] as const;
+const REACTION_TYPES = ["👍", "👎", "❤️", "🎉", "😂", "❓"] as const;
 
 // Describe a body-less message for notification/preview text by its first
 // attachment, matching the thread-list media labels.
@@ -81,7 +81,7 @@ export const messagesRouter = router({
       const admin = createAdminClient();
       let query = admin
         .from("messages")
-        .select("id, body, created_at, edited_at, is_deleted, thread_id, user_id, attachments, reply_to_id, poll_id, smeter_id, system_event, profiles(id, display_name, avatar_url)")
+        .select("id, body, created_at, edited_at, is_deleted, thread_id, user_id, client_id, attachments, reply_to_id, poll_id, smeter_id, system_event, profiles(id, display_name, avatar_url)")
         .eq("thread_id", input.threadId)
         .order("created_at", { ascending: false })
         .limit(input.limit);
@@ -244,6 +244,7 @@ export const messagesRouter = router({
             )
             .default([]),
           replyToId: z.string().uuid().optional(),
+          clientId: z.string().max(64).optional(),
         })
         .refine((d) => d.body.trim().length > 0 || d.attachments.length > 0, {
           message: "Message must have text or attachments",
@@ -285,8 +286,9 @@ export const messagesRouter = router({
             body: input.body,
             attachments: input.attachments,
             reply_to_id: input.replyToId ?? null,
+            client_id: input.clientId ?? null,
           })
-          .select("id, body, created_at, edited_at, is_deleted, thread_id, user_id, attachments, reply_to_id, poll_id, smeter_id, system_event, profiles(id, display_name, avatar_url)")
+          .select("id, body, created_at, edited_at, is_deleted, thread_id, user_id, client_id, attachments, reply_to_id, poll_id, smeter_id, system_event, profiles(id, display_name, avatar_url)")
           .single(),
         admin
           .from("threads")
@@ -386,9 +388,12 @@ export const messagesRouter = router({
             if (subs && subs.length > 0) {
               const { sendWebPush } = await import("@/lib/web-push");
               const payload = {
+                // Collapse on the thread (not the message id): multiple messages
+                // in the same thread replace into ONE OS notification showing the
+                // latest, instead of stacking N notifications.
                 title: senderName,
                 body: `${location}\n${previewBody}`,
-                tag: data?.id ?? input.threadId,
+                tag: `thread-${input.threadId}`,
                 data: { threadId: input.threadId, groupId: thread.group_id },
               };
               const results = await Promise.all(
@@ -456,7 +461,7 @@ export const messagesRouter = router({
     .input(
       z.object({
         messageId: z.string().uuid(),
-        type: z.enum(["👍", "👎", "❓"]),
+        type: z.enum(["👍", "👎", "❤️", "🎉", "😂", "❓"]),
       })
     )
     .mutation(async ({ ctx, input }) => {
