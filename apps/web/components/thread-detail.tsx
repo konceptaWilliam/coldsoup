@@ -579,6 +579,36 @@ function AttachmentModal({
   const [view, setView] = useState<"preview" | "resend">("preview");
   const [sentToThread, setSentToThread] = useState<string | null>(null);
 
+  // Swipe-down-to-dismiss (mobile), matching the S-meter sheet. Only engages
+  // when the scrollable preview is at the top and the drag is downward, so it
+  // doesn't fight scrolling a tall image or the resend list.
+  const sheetRef = useRef<HTMLDivElement>(null);
+  const dragStart = useRef<{ y: number; scroll: number } | null>(null);
+  const [dragY, setDragY] = useState(0);
+  const [dragging, setDragging] = useState(false);
+
+  function onSheetTouchStart(e: React.TouchEvent) {
+    dragStart.current = {
+      y: e.touches[0].clientY,
+      scroll: sheetRef.current?.scrollTop ?? 0,
+    };
+  }
+  function onSheetTouchMove(e: React.TouchEvent) {
+    const s = dragStart.current;
+    if (!s) return;
+    const dy = e.touches[0].clientY - s.y;
+    if (s.scroll <= 0 && dy > 0) {
+      setDragging(true);
+      setDragY(dy);
+    }
+  }
+  function onSheetTouchEnd() {
+    if (dragStart.current && dragY > 110) onClose();
+    else setDragY(0);
+    setDragging(false);
+    dragStart.current = null;
+  }
+
   const { data: threads } = trpc.threads.list.useQuery({ groupId });
   const send = trpc.messages.send.useMutation({
     onSuccess: (_, vars) => {
@@ -616,7 +646,20 @@ function AttachmentModal({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="bg-surface w-full max-w-2xl max-h-[90vh] flex flex-col border border-border">
+      <div
+        className="bg-surface w-full max-w-2xl max-h-[90vh] flex flex-col border border-border"
+        onTouchStart={onSheetTouchStart}
+        onTouchMove={onSheetTouchMove}
+        onTouchEnd={onSheetTouchEnd}
+        style={{
+          transform: dragY ? `translateY(${dragY}px)` : undefined,
+          transition: dragging ? "none" : "transform 0.2s ease",
+        }}
+      >
+        {/* Drag handle (swipe-down-to-dismiss affordance, mobile only) */}
+        <div className="md:hidden flex justify-center pt-2 pb-1 flex-shrink-0">
+          <div className="h-1 w-9 rounded-full bg-border-strong" />
+        </div>
         <div className="flex items-center justify-between px-4 py-3 border-b border-border flex-shrink-0">
           <span className="font-mono text-xs text-muted truncate flex-1 mr-4">
             {attachment.name}
@@ -630,7 +673,10 @@ function AttachmentModal({
         </div>
 
         {view === "preview" ? (
-          <div className="flex-1 overflow-auto flex items-center justify-center p-6 min-h-0">
+          <div
+            ref={sheetRef}
+            className="flex-1 overflow-auto flex items-center justify-center p-6 min-h-0"
+          >
             {attachment.type === "image" ? (
               <img
                 src={attachment.url}
@@ -1531,6 +1577,11 @@ export function ThreadDetail({
   // reflow after send) have no touch, so they must never dismiss the keyboard.
   const userScrollingRef = useRef(false);
   const userScrollClearRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Long-press on a reaction chip → show who reacted (touch reliable, vs. the
+  // hover tooltip / contextmenu which don't fire dependably on mobile).
+  const reactionPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reactionPressStartRef = useRef<{ x: number; y: number } | null>(null);
+  const reactionLongPressedRef = useRef<string | null>(null);
   // Swipe-right-to-reply gesture state (touch only).
   const swipeRef = useRef<{
     id: string;
@@ -1646,6 +1697,7 @@ export function ThreadDetail({
         clearTimeout(programmaticScrollTimerRef.current);
       }
       if (userScrollClearRef.current) clearTimeout(userScrollClearRef.current);
+      if (reactionPressTimerRef.current) clearTimeout(reactionPressTimerRef.current);
     };
   }, []);
 
@@ -2753,6 +2805,38 @@ export function ThreadDetail({
     }
   }
 
+  // --- Long-press a reaction chip to reveal who reacted ---
+  function startReactionPress(
+    e: React.PointerEvent<HTMLButtonElement>,
+    tooltipKey: string,
+  ) {
+    // Don't let the press bubble to the row's long-press / swipe handlers.
+    e.stopPropagation();
+    if (e.pointerType === "mouse") return;
+    reactionPressStartRef.current = { x: e.clientX, y: e.clientY };
+    if (reactionPressTimerRef.current) clearTimeout(reactionPressTimerRef.current);
+    reactionPressTimerRef.current = setTimeout(() => {
+      reactionLongPressedRef.current = tooltipKey;
+      haptic("light");
+      setActiveTooltip(tooltipKey);
+      if (tooltipTimerRef.current) clearTimeout(tooltipTimerRef.current);
+      tooltipTimerRef.current = setTimeout(() => setActiveTooltip(null), 3000);
+    }, 400);
+  }
+
+  function moveReactionPress(e: React.PointerEvent<HTMLButtonElement>) {
+    const s = reactionPressStartRef.current;
+    if (!s) return;
+    if (Math.abs(e.clientX - s.x) > 10 || Math.abs(e.clientY - s.y) > 10) {
+      if (reactionPressTimerRef.current) clearTimeout(reactionPressTimerRef.current);
+    }
+  }
+
+  function endReactionPress() {
+    if (reactionPressTimerRef.current) clearTimeout(reactionPressTimerRef.current);
+    reactionPressStartRef.current = null;
+  }
+
   function openMessageMenuFromContext(
     e: React.MouseEvent<HTMLDivElement>,
     message: Message,
@@ -3506,18 +3590,36 @@ export function ThreadDetail({
                                     return (
                                       <div key={r.type} className="relative">
                                         <button
-                                          onClick={() =>
+                                          onClick={() => {
+                                            // Swallow the click that ends a
+                                            // long-press so it doesn't toggle.
+                                            if (
+                                              reactionLongPressedRef.current ===
+                                              tooltipKey
+                                            ) {
+                                              reactionLongPressedRef.current =
+                                                null;
+                                              return;
+                                            }
                                             toggleReaction.mutate({
                                               messageId: msg.id,
                                               type: r.type as ReactionType,
-                                            })
-                                          }
+                                            });
+                                          }}
                                           onMouseEnter={() =>
                                             setActiveTooltip(tooltipKey)
                                           }
                                           onMouseLeave={() =>
                                             setActiveTooltip(null)
                                           }
+                                          onPointerDown={(e) =>
+                                            startReactionPress(e, tooltipKey)
+                                          }
+                                          onPointerMove={moveReactionPress}
+                                          onPointerUp={endReactionPress}
+                                          onPointerCancel={endReactionPress}
+                                          onPointerLeave={endReactionPress}
+                                          onTouchStart={(e) => e.stopPropagation()}
                                           onContextMenu={(e) => {
                                             e.preventDefault();
                                             setActiveTooltip(tooltipKey);
@@ -3552,8 +3654,15 @@ export function ThreadDetail({
                                         </button>
                                         {isTooltipVisible &&
                                           r.users.length > 0 && (
-                                            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 z-30 bg-ink text-surface font-mono text-[10px] px-2 py-1 pointer-events-none whitespace-nowrap max-w-[200px] overflow-hidden text-ellipsis">
-                                              {r.users.join(", ")}
+                                            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 z-30 max-h-40 overflow-y-auto bg-ink text-surface font-mono text-[10px] px-2.5 py-1.5 pointer-events-none min-w-max max-w-[180px] space-y-0.5">
+                                              <div className="text-surface/50 uppercase tracking-[0.1em] mb-1">
+                                                {r.type} {r.count}
+                                              </div>
+                                              {r.users.map((u, i) => (
+                                                <div key={i} className="truncate">
+                                                  {u}
+                                                </div>
+                                              ))}
                                             </div>
                                           )}
                                       </div>
