@@ -61,18 +61,32 @@ self.addEventListener("push", (event) => {
   }
 
   const title = payload.title || "Coldsoup";
+  // `renotify: true` REQUIRES a non-empty tag — otherwise showNotification
+  // rejects with a TypeError and NOTHING shows (this silently broke the test
+  // notification, which carries no tag). Always supply a fallback tag.
+  const tag =
+    payload.tag || (payload.data && payload.data.threadId) || "coldsoup";
   const options = {
     body: payload.body || "",
     icon: "/icons/icon-192.png",
     badge: "/icons/icon-192.png",
-    tag: payload.tag || (payload.data && payload.data.threadId) || undefined,
+    tag,
     renotify: true,
     data: payload.data || {},
   };
 
   event.waitUntil(
     (async () => {
-      await self.registration.showNotification(title, options);
+      try {
+        await self.registration.showNotification(title, options);
+      } catch (e) {
+        // Last-resort fallback so a malformed option never swallows the notice.
+        await self.registration.showNotification(title, {
+          body: options.body,
+          icon: options.icon,
+          tag,
+        });
+      }
       // App-icon badge = number of undismissed notifications.
       if (self.navigator.setAppBadge) {
         try {
