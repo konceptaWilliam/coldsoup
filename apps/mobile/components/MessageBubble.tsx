@@ -88,9 +88,9 @@ export function MessageBubble({ message, displayName, avatarUrl, mentionNames, o
       </Pressable>
       <View style={{ flex: 1 }}>
         <View style={{ flexDirection: "row", alignItems: "baseline", gap: 8, marginBottom: 3 }}>
-          <Text style={{ fontSize: 13, fontWeight: "600", color: c.ink }}>{displayName}</Text>
-          <Text style={{ fontSize: 11, color: c.muted2 }}>{formatTime(message.created_at)}</Text>
-          {message.edited_at && <Text style={{ fontSize: 11, color: c.muted2 }}>{t("message.edited")}</Text>}
+          <Text style={{ fontSize: 15, fontWeight: "600", color: c.ink }}>{displayName}</Text>
+          <Text style={{ fontSize: 13, color: c.muted2 }}>{formatTime(message.created_at)}</Text>
+          {message.edited_at && <Text style={{ fontSize: 13, color: c.muted2 }}>{t("message.edited")}</Text>}
         </View>
         {message.reply_to && (
           <Pressable
@@ -100,13 +100,13 @@ export function MessageBubble({ message, displayName, avatarUrl, mentionNames, o
             accessibilityLabel={onReplyPress ? t("a11y.jumpToReply") : undefined}
             style={({ pressed }) => ({ borderLeftWidth: 2, borderLeftColor: c.border, paddingLeft: 8, marginBottom: 6, opacity: pressed && onReplyPress ? 0.6 : 1 })}
           >
-            <Text style={{ fontSize: 11, color: c.muted, fontWeight: "600" }}>{message.reply_to.author_name}</Text>
-            <Text style={{ fontSize: 11, color: c.muted }} numberOfLines={1}>{message.reply_to.body}</Text>
+            <Text style={{ fontSize: 13, color: c.muted, fontWeight: "600" }}>{message.reply_to.author_name}</Text>
+            <Text style={{ fontSize: 13, color: c.muted }} numberOfLines={1}>{message.reply_to.body}</Text>
           </Pressable>
         )}
         {(isDeleted || message.body.length > 0) && (
           <Text
-            style={{ fontSize: 14, color: isDeleted ? c.muted2 : c.ink, fontStyle: isDeleted ? "italic" : "normal", lineHeight: 20 }}
+            style={{ fontSize: 18, color: isDeleted ? c.muted2 : c.ink, fontStyle: isDeleted ? "italic" : "normal", lineHeight: 26 }}
             selectable
           >
             {isDeleted ? t("message.deleted") : renderBody(message.body, mentionNames ?? [], c)}

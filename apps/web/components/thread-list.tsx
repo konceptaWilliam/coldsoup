@@ -30,6 +30,7 @@ type Thread = {
     smeters?: { title: string | null } | null;
     is_deleted?: boolean;
     created_at: string;
+    user_id: string;
     profiles: { display_name: string } | null;
   }>;
 };
@@ -368,6 +369,7 @@ export function ThreadList({ groupId, groupName }: { groupId: string; groupName:
     { refetchOnWindowFocus: false }
   );
   const { data: notifPrefs } = trpc.notifications.prefs.useQuery();
+  const { data: me } = trpc.profile.get.useQuery();
 
   const threads = rawThreads as unknown as Thread[];
   const isGroupMuted = !!notifPrefs?.groupIds.includes(groupId);
@@ -399,13 +401,14 @@ export function ThreadList({ groupId, groupName }: { groupId: string; groupName:
       }
 
       const unread = (thread.messages ?? []).filter(
-        (m) => new Date(m.created_at).getTime() > lastSeen
+        // Your own messages must never count as unread — you sent them.
+        (m) => m.user_id !== me?.id && new Date(m.created_at).getTime() > lastSeen
       ).length;
 
       setThreadCount(thread.id, groupId, unread, thread.status === "URGENT");
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rawThreads, groupId]);
+  }, [rawThreads, groupId, me?.id]);
 
   // Realtime: invalidate thread list on any change (new messages update thread.updated_at)
   useEffect(() => {

@@ -1673,11 +1673,18 @@ export function ThreadDetail({
     markRead(threadId, groupId);
   }, [threadId, groupId, markRead]);
 
-  // Server-side read receipt — mark on open and whenever new messages arrive.
+  // Read receipts — mark on open and whenever new messages arrive while the
+  // thread is open. Advances BOTH the client lastSeen marker (so the
+  // thread-list unread dot clears for messages seen while viewing, including
+  // your own just-sent message) and the server-side receipt (so others see
+  // "seen").
   useEffect(() => {
-    if (messages.length > 0) markReadServer.mutate({ threadId });
+    if (messages.length > 0) {
+      markRead(threadId, groupId);
+      markReadServer.mutate({ threadId });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [threadId, messages.length]);
+  }, [threadId, groupId, messages.length]);
 
   useEffect(() => {
     isInitialLoad.current = true;
@@ -2974,32 +2981,45 @@ export function ThreadDetail({
     [activeMessageMenuId, displayMessages],
   );
 
-  const seenReceipt = useMemo(() => {
-    if (!myInfo) return null;
+  // Map each of my messages → the readers whose read position lands on it.
+  // A reader is placed on the LATEST of my messages they've actually read past
+  // (created_at <= their last_read_at), so readers who are "behind" still show
+  // on their real position instead of vanishing when someone reads further.
+  const seenByMessage = useMemo(() => {
+    const result: Record<
+      string,
+      Array<{ id: string; name: string; avatarUrl: string | null }>
+    > = {};
+    if (!myInfo) return result;
     const rows = readReceipts as Array<{
       user_id: string;
       last_read_at: string;
       display_name: string;
       avatar_url: string | null;
     }>;
-    for (let i = messages.length - 1; i >= 0; i -= 1) {
-      const msg = messages[i];
-      if (msg.user_id !== myInfo.id || msg.delivery_status) continue;
-      const msgTime = new Date(msg.created_at).getTime();
-      const readers = rows
-        .filter(
-          (r) =>
-            r.user_id !== myInfo.id &&
-            new Date(r.last_read_at).getTime() >= msgTime,
-        )
-        .map((r) => ({
-          id: r.user_id,
-          name: r.display_name,
-          avatarUrl: r.avatar_url,
-        }));
-      if (readers.length > 0) return { messageId: msg.id, readers };
+    const ownMessages = messages.filter(
+      (m) => m.user_id === myInfo.id && !m.delivery_status,
+    );
+    if (ownMessages.length === 0) return result;
+
+    for (const r of rows) {
+      if (r.user_id === myInfo.id) continue;
+      const readTime = new Date(r.last_read_at).getTime();
+      let target: (typeof ownMessages)[number] | null = null;
+      for (let i = ownMessages.length - 1; i >= 0; i -= 1) {
+        if (new Date(ownMessages[i].created_at).getTime() <= readTime) {
+          target = ownMessages[i];
+          break;
+        }
+      }
+      if (!target) continue;
+      (result[target.id] ??= []).push({
+        id: r.user_id,
+        name: r.display_name,
+        avatarUrl: r.avatar_url,
+      });
     }
-    return null;
+    return result;
   }, [messages, myInfo, readReceipts]);
 
   const messagesByDate = useMemo(() => {
@@ -3174,10 +3194,7 @@ export function ThreadDetail({
                     const failedEntry = msg.fail_id
                       ? failedSends.find((f) => f.failId === msg.fail_id)
                       : undefined;
-                    const seenReaders =
-                      seenReceipt?.messageId === msg.id
-                        ? seenReceipt.readers
-                        : [];
+                    const seenReaders = seenByMessage[msg.id] ?? [];
 
                     return (
                       <div
@@ -3222,7 +3239,10 @@ export function ThreadDetail({
                             e.currentTarget.querySelector<HTMLElement>(
                               ".msg-actions",
                             );
-                          if (actions) actions.style.opacity = "1";
+                          if (actions) {
+                            actions.style.opacity = "1";
+                            actions.style.pointerEvents = "auto";
+                          }
                         }}
                         onMouseLeave={(e) => {
                           if (!window.matchMedia("(hover: hover)").matches) return;
@@ -3230,7 +3250,10 @@ export function ThreadDetail({
                             e.currentTarget.querySelector<HTMLElement>(
                               ".msg-actions",
                             );
-                          if (actions) actions.style.opacity = "0";
+                          if (actions) {
+                            actions.style.opacity = "0";
+                            actions.style.pointerEvents = "none";
+                          }
                         }}
                       >
                         {/* Avatar column */}
@@ -3259,10 +3282,10 @@ export function ThreadDetail({
                         <div className="flex-1 min-w-0">
                           {!isSameAuthor && (
                             <div className="flex items-baseline gap-2 mb-0.5">
-                              <span className="text-[13px] font-semibold text-ink">
+                              <span className="text-[15px] font-semibold text-ink">
                                 {name}
                               </span>
-                              <span className="font-mono text-[10px] text-muted">
+                              <span className="font-mono text-[12px] text-muted">
                                 {formatTime(msg.created_at)}
                               </span>
                             </div>
@@ -3285,10 +3308,10 @@ export function ThreadDetail({
                                 }}
                               >
                                 <div className="min-w-0">
-                                  <span className="font-mono text-[10px] text-muted font-semibold">
+                                  <span className="font-mono text-[12px] text-muted font-semibold">
                                     {msg.reply_to.author_name}
                                   </span>
-                                  <p className="text-[12px] text-muted truncate leading-snug">
+                                  <p className="text-[13px] text-muted truncate leading-snug">
                                     {msg.reply_to.body}
                                   </p>
                                 </div>
@@ -3362,7 +3385,7 @@ export function ThreadDetail({
                                   <SMeterCard smeter={msg.smeter} threadId={threadId} />
                                 )}
                                 {msg.body && (
-                                  <p className="text-[13.5px] leading-[1.55] text-ink whitespace-pre-wrap break-words">
+                                  <p className="text-[16px] leading-[1.5] text-ink whitespace-pre-wrap break-words">
                                     {renderBody(
                                       msg.body,
                                       members,
@@ -3388,6 +3411,13 @@ export function ThreadDetail({
                                 className="msg-actions select-none absolute -top-[14px] right-0 flex gap-0.5 bg-surface-2 border border-border p-0.5"
                                 style={{
                                   opacity: 0,
+                                  // Invisible by default and only revealed on real
+                                  // hover (desktop). pointer-events must track
+                                  // opacity, otherwise on touch — where mouseenter
+                                  // never fires — the hidden reaction/copy buttons
+                                  // stay tappable and a stray tap fires a phantom
+                                  // reaction.
+                                  pointerEvents: "none",
                                   transition: "opacity 160ms ease",
                                 }}
                               >
