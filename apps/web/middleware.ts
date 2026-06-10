@@ -1,5 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 
 export async function middleware(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request });
@@ -55,6 +56,26 @@ export async function middleware(request: NextRequest) {
     const url = request.nextUrl.clone();
     url.pathname = "/";
     return NextResponse.redirect(url);
+  }
+
+  // Force passwordless invited users (magic-link only, no password/OAuth) to set
+  // a password before using the app. Only check on top-level document
+  // navigations — not data/asset requests — and skip the pages they need to
+  // reach to finish setup (onboarding + the set-password page itself).
+  const passwordExempt =
+    isPublic || pathname === "/onboarding" || pathname === "/auth/set-password";
+  const isDocumentNav = request.headers.get("accept")?.includes("text/html");
+
+  if (user && isDocumentNav && !passwordExempt) {
+    const admin = createAdminClient();
+    const { data: needsPassword } = await admin.rpc("needs_password_setup", {
+      uid: user.id,
+    });
+    if (needsPassword) {
+      const url = request.nextUrl.clone();
+      url.pathname = "/auth/set-password";
+      return NextResponse.redirect(url);
+    }
   }
 
   return supabaseResponse;

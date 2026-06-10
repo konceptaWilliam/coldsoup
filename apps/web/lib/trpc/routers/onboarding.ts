@@ -17,6 +17,19 @@ export const onboardingRouter = router({
     return { authed: true, hasProfile: !!data };
   }),
 
+  // Public: a freshly-authed invited user (magic-link only, no password/OAuth)
+  // must set a password before using the app. Returns false on any error so a
+  // backend hiccup never locks an otherwise-valid user out.
+  needsPasswordSetup: publicProcedure.query(async ({ ctx }) => {
+    if (!ctx.user) return false;
+    const admin = createAdminClient();
+    const { data, error } = await admin.rpc("needs_password_setup", {
+      uid: ctx.user.id,
+    });
+    if (error) return false;
+    return !!data;
+  }),
+
   complete: publicProcedure
     .input(
       z.object({

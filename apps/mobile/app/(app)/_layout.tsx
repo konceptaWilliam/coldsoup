@@ -29,6 +29,17 @@ export default function AppLayout() {
     }
   }, [status, pathname]);
 
+  // Invited (magic-link only) users have no password — force them to set one
+  // before using the app. Runs after the profile gate so display name comes first.
+  const { data: needsPassword } = trpc.onboarding.needsPasswordSetup.useQuery(undefined, {
+    enabled: checked && !!status?.hasProfile,
+  });
+  useEffect(() => {
+    if (needsPassword && status?.hasProfile && pathname !== "/set-password") {
+      router.replace("/(app)/set-password");
+    }
+  }, [needsPassword, status, pathname]);
+
   if (!checked) return null;
 
   const headerBase = {
@@ -49,6 +60,7 @@ export default function AppLayout() {
         <Stack.Screen name="search" options={{ headerShown: false }} />
         <Stack.Screen name="settings" options={{ headerShown: false }} />
         <Stack.Screen name="onboarding" options={{ headerShown: false }} />
+        <Stack.Screen name="set-password" options={{ headerShown: false, gestureEnabled: false }} />
         <Stack.Screen name="group/[groupId]" options={{ headerShown: false, gestureEnabled: false }} />
         <Stack.Screen name="members/[groupId]" options={{ headerShown: true, title: "", ...headerBase }} />
         <Stack.Screen name="thread/[threadId]" options={{ headerShown: false }} />

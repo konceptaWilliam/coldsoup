@@ -29,6 +29,18 @@
     "placeholder": "Your name",
     "continue": "Continue"
   },
+  "setPassword": {
+    "title": "Set a password",
+    "subtitle": "Choose a password so you can always sign back in.",
+    "password": "Password",
+    "confirm": "Confirm password",
+    "placeholder": "At least 8 characters",
+    "confirmPlaceholder": "Repeat password",
+    "submit": "Set password",
+    "tooShort": "Password must be at least 8 characters.",
+    "mismatch": "Passwords don't match.",
+    "failed": "Could not set password"
+  },
   "groups": {
     "empty": "No groups yet. Ask your admin to add you to one.",
     "newGroup": "New group",
