@@ -240,6 +240,42 @@ export const threadsRouter = router({
       return { success: true };
     }),
 
+  // Per-thread unread message counts for the thread-list badge. `since` is the
+  // client's persisted lastSeen baseline ({ threadId: epochMs }); the server
+  // counts messages newer than it, excluding the caller's own and deleted ones.
+  unreadCounts: protectedProcedure
+    .input(
+      z.object({
+        groupId: z.string().uuid(),
+        since: z.record(z.string().uuid(), z.number()),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const { supabase, profile } = ctx;
+
+      const { data: membership } = await supabase
+        .from("group_memberships")
+        .select("id")
+        .eq("group_id", input.groupId)
+        .eq("user_id", profile.id)
+        .single();
+      if (!membership) throw new TRPCError({ code: "FORBIDDEN" });
+
+      const admin = createAdminClient();
+      const { data, error } = await admin.rpc("thread_unread_counts", {
+        p_user: profile.id,
+        p_group: input.groupId,
+        p_since: input.since,
+      });
+      if (error) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: error.message });
+
+      const result: Record<string, number> = {};
+      for (const row of (data ?? []) as Array<{ thread_id: string; cnt: number }>) {
+        result[row.thread_id] = Number(row.cnt);
+      }
+      return result;
+    }),
+
   reads: protectedProcedure
     .input(z.object({ threadId: z.string().uuid() }))
     .query(async ({ ctx, input }) => {

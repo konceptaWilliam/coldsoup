@@ -100,19 +100,6 @@ function formatDue(ymd: string): string {
   });
 }
 
-function UnreadPrism({ isUrgent }: { isUrgent: boolean }) {
-  return (
-    <span
-      className="inline-block w-2 h-2 flex-shrink-0"
-      style={{
-        background: isUrgent ? "hsl(0 75% 52%)" : "hsl(0 70% 78%)",
-        border: `1px solid ${isUrgent ? "hsl(0 65% 38%)" : "hsl(0 50% 62%)"}`,
-        transform: "rotate(45deg)",
-      }}
-    />
-  );
-}
-
 function MemberAvatar({ member }: { member: { display_name: string; avatar_url: string | null } }) {
   return (
     <div
@@ -369,7 +356,6 @@ export function ThreadList({ groupId, groupName }: { groupId: string; groupName:
     { refetchOnWindowFocus: false }
   );
   const { data: notifPrefs } = trpc.notifications.prefs.useQuery();
-  const { data: me } = trpc.profile.get.useQuery();
 
   const threads = rawThreads as unknown as Thread[];
   const isGroupMuted = !!notifPrefs?.groupIds.includes(groupId);
@@ -385,30 +371,45 @@ export function ThreadList({ groupId, groupName }: { groupId: string; groupName:
     { key: "DONE", label: "Done" },
   ];
 
-  // Calculate and push unread counts whenever thread data changes
+  // Initialise the lastSeen baseline for any never-seen thread to "now", so old
+  // history isn't counted as unread the first time a thread appears.
   useEffect(() => {
     if (threads.length === 0) return;
-
     const now = Date.now();
-
     for (const thread of threads) {
-      // If never seen, initialise lastSeen to now so old messages aren't counted
-      const lastSeen = getLastSeen(thread.id);
-      if (lastSeen === 0) {
-        setLastSeen(thread.id, now);
-        setThreadCount(thread.id, groupId, 0);
-        continue;
-      }
-
-      const unread = (thread.messages ?? []).filter(
-        // Your own messages must never count as unread — you sent them.
-        (m) => m.user_id !== me?.id && new Date(m.created_at).getTime() > lastSeen
-      ).length;
-
-      setThreadCount(thread.id, groupId, unread, thread.status === "URGENT");
+      if (getLastSeen(thread.id) === 0) setLastSeen(thread.id, now);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rawThreads, groupId, me?.id]);
+  }, [rawThreads]);
+
+  // Client lastSeen baseline → server. Recomputed when the thread set changes or
+  // on navigation (opening/closing a thread updates its lastSeen marker).
+  const since = useMemo(() => {
+    const s: Record<string, number> = {};
+    for (const thread of threads) s[thread.id] = getLastSeen(thread.id) || Date.now();
+    return s;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rawThreads, pathname]);
+
+  const { data: serverCounts } = trpc.threads.unreadCounts.useQuery(
+    { groupId, since },
+    { enabled: threads.length > 0 }
+  );
+
+  // Push real per-thread counts into the shared unread store (drives the badge
+  // here and the group totals).
+  useEffect(() => {
+    if (!serverCounts) return;
+    for (const thread of threads) {
+      setThreadCount(
+        thread.id,
+        groupId,
+        serverCounts[thread.id] ?? 0,
+        thread.status === "URGENT"
+      );
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serverCounts, groupId]);
 
   // Realtime: invalidate thread list on any change (new messages update thread.updated_at)
   useEffect(() => {
@@ -419,7 +420,10 @@ export function ThreadList({ groupId, groupName }: { groupId: string; groupName:
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "threads", filter: `group_id=eq.${groupId}` },
-        () => { utils.threads.list.invalidate({ groupId }); }
+        () => {
+          utils.threads.list.invalidate({ groupId });
+          utils.threads.unreadCounts.invalidate({ groupId });
+        }
       )
       .subscribe();
 
@@ -517,18 +521,32 @@ export function ThreadList({ groupId, groupName }: { groupId: string; groupName:
             const isThreadMuted = !!notifPrefs?.threadIds.includes(thread.id);
             const overdue = thread.due_date ? isOverdue(thread.due_date) : false;
 
-            const borderLeftColor = isActive ? "var(--pastel-deep)" : "transparent";
+            // Unread threads get a bold left accent bar (amber when URGENT, ink
+            // otherwise); read threads dim down so unread pops on a left-edge
+            // scan. Active selection still wins the bar colour.
+            const borderLeftColor = isActive
+              ? "var(--pastel-deep)"
+              : unread > 0
+                ? thread.status === "URGENT"
+                  ? "var(--accent)"
+                  : "var(--ink)"
+                : "transparent";
+            const dimRead = !isActive && !isDone && unread === 0;
 
             return (
               <Link
                 key={thread.id}
                 href={href}
-                className={`block py-3 border-b border-border transition-colors duration-150 ${
-                  isDone ? "opacity-35" : ""
+                className={`block py-3 border-b border-border transition-all duration-150 ${
+                  isDone
+                    ? "opacity-35"
+                    : dimRead
+                      ? "opacity-60 hover:opacity-100"
+                      : ""
                 } ${isActive ? "bg-pastel-tint/60" : "hover:bg-border/30"}`}
                 style={{
-                  borderLeft: `3px solid ${borderLeftColor}`,
-                  paddingLeft: "15px",
+                  borderLeft: `${unread > 0 && !isActive ? "4px" : "3px"} solid ${borderLeftColor}`,
+                  paddingLeft: unread > 0 && !isActive ? "14px" : "15px",
                   paddingRight: "18px",
                 }}
               >
@@ -543,7 +561,21 @@ export function ThreadList({ groupId, groupName }: { groupId: string; groupName:
                     <span className="lowercase">{thread.title}</span>
                   </span>
                   <div className="flex items-center gap-1.5 flex-shrink-0">
-                    {unread > 0 && <UnreadPrism isUrgent={thread.status === "URGENT"} />}
+                    {unread > 0 && (
+                      <span
+                        className="font-mono text-[10px] font-semibold leading-none px-1.5 py-1 min-w-[18px] text-center tabular-nums"
+                        style={{
+                          background:
+                            thread.status === "URGENT"
+                              ? "var(--accent)"
+                              : "var(--ink)",
+                          color: "var(--surface)",
+                        }}
+                        title={`${unread} unread`}
+                      >
+                        {unread > 99 ? "99+" : unread}
+                      </span>
+                    )}
                     {isThreadMuted && (
                       <span className="text-muted-2" title="Muted">
                         <BellOffIcon />

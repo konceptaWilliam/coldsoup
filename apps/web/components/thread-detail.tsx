@@ -565,7 +565,10 @@ function renderBody(
   return parts.length ? <>{parts}</> : body;
 }
 
-function AttachmentModal({
+// Long-press / hold actions for an attachment: download + resend to another
+// thread. Opened by holding (or right-clicking) an image — the plain tap opens
+// the zoomable lightbox instead.
+function AttachmentActions({
   attachment,
   groupId,
   currentThreadId,
@@ -576,12 +579,10 @@ function AttachmentModal({
   currentThreadId: string;
   onClose: () => void;
 }) {
-  const [view, setView] = useState<"preview" | "resend">("preview");
+  const [view, setView] = useState<"actions" | "resend">("actions");
   const [sentToThread, setSentToThread] = useState<string | null>(null);
 
-  // Swipe-down-to-dismiss (mobile), matching the S-meter sheet. Only engages
-  // when the scrollable preview is at the top and the drag is downward, so it
-  // doesn't fight scrolling a tall image or the resend list.
+  // Swipe-down-to-dismiss (mobile), matching the S-meter sheet.
   const sheetRef = useRef<HTMLDivElement>(null);
   const dragStart = useRef<{ y: number; scroll: number } | null>(null);
   const [dragY, setDragY] = useState(0);
@@ -613,7 +614,7 @@ function AttachmentModal({
   const send = trpc.messages.send.useMutation({
     onSuccess: (_, vars) => {
       setSentToThread(vars.threadId);
-      setTimeout(onClose, 1500);
+      setTimeout(onClose, 1200);
     },
   });
 
@@ -624,6 +625,7 @@ function AttachmentModal({
       const file = new File([blob], attachment.name, { type: blob.type });
       if (navigator.canShare?.({ files: [file] })) {
         await navigator.share({ files: [file] });
+        onClose();
         return;
       }
       const url = URL.createObjectURL(blob);
@@ -635,19 +637,20 @@ function AttachmentModal({
     } catch {
       window.open(attachment.url, "_blank");
     }
+    onClose();
   }
 
   const otherThreads = (threads ?? []).filter((t) => t.id !== currentThreadId);
 
   return (
     <div
-      className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4"
+      className="fixed inset-0 bg-black/60 flex items-end sm:items-center justify-center z-[60]"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
       <div
-        className="bg-surface w-full max-w-2xl max-h-[90vh] flex flex-col border border-border"
+        className="bg-surface w-full sm:max-w-sm max-h-[80vh] flex flex-col border border-border"
         onTouchStart={onSheetTouchStart}
         onTouchMove={onSheetTouchMove}
         onTouchEnd={onSheetTouchEnd}
@@ -657,7 +660,7 @@ function AttachmentModal({
         }}
       >
         {/* Drag handle (swipe-down-to-dismiss affordance, mobile only) */}
-        <div className="md:hidden flex justify-center pt-2 pb-1 flex-shrink-0">
+        <div className="sm:hidden flex justify-center pt-2 pb-1 flex-shrink-0">
           <div className="h-1 w-9 rounded-full bg-border-strong" />
         </div>
         <div className="flex items-center justify-between px-4 py-3 border-b border-border flex-shrink-0">
@@ -672,111 +675,294 @@ function AttachmentModal({
           </button>
         </div>
 
-        {view === "preview" ? (
-          <div
-            ref={sheetRef}
-            className="flex-1 overflow-auto flex items-center justify-center p-6 min-h-0"
-          >
-            {attachment.type === "image" ? (
-              <img
-                src={attachment.url}
-                alt={attachment.name}
-                className="max-w-full max-h-full object-contain"
-                loading="lazy"
-              />
-            ) : (
-              <div className="flex flex-col items-center gap-4">
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  width="40"
-                  height="40"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  className="text-muted"
-                >
-                  <path d="M9 18V5l12-2v13" />
-                  <circle cx="6" cy="18" r="3" />
-                  <circle cx="18" cy="16" r="3" />
-                </svg>
-                <span className="font-mono text-sm text-muted">
-                  {attachment.name}
-                </span>
-                <audio
-                  controls
-                  src={attachment.url}
-                  className="w-full max-w-sm"
-                />
-              </div>
-            )}
-          </div>
-        ) : (
-          <div className="flex-1 overflow-y-auto p-4 min-h-0">
-            <p className="font-mono text-[10px] text-muted uppercase tracking-wider mb-3">
-              Send to thread
-            </p>
-            {sentToThread ? (
-              <p className="font-mono text-sm text-ink">Sent!</p>
-            ) : otherThreads.length === 0 ? (
-              <p className="text-xs text-muted">
-                No other threads in this group.
+        <div ref={sheetRef} className="flex-1 overflow-y-auto min-h-0 p-2">
+          {view === "actions" ? (
+            <div className="space-y-1">
+              <button
+                onClick={handleDownload}
+                className="w-full text-left px-3 py-3 font-mono text-sm text-ink hover:bg-border/40 transition-colors"
+              >
+                Download
+              </button>
+              <button
+                onClick={() => setView("resend")}
+                className="w-full text-left px-3 py-3 font-mono text-sm text-ink hover:bg-border/40 transition-colors"
+              >
+                Resend to another thread
+              </button>
+            </div>
+          ) : (
+            <div className="p-2">
+              <button
+                onClick={() => setView("actions")}
+                className="font-mono text-xs text-muted hover:text-ink transition-colors mb-3"
+              >
+                ← Back
+              </button>
+              <p className="font-mono text-[10px] text-muted uppercase tracking-wider mb-2">
+                Send to thread
               </p>
-            ) : (
-              <div className="space-y-1">
-                {otherThreads.map((thread) => (
-                  <button
-                    key={thread.id}
-                    onClick={() =>
-                      send.mutate({
-                        threadId: thread.id,
-                        body: "",
-                        attachments: [attachment],
-                      })
-                    }
-                    disabled={send.isPending}
-                    className="w-full text-left px-3 py-2.5 font-mono text-sm text-ink hover:bg-border/40 transition-colors border border-transparent hover:border-border disabled:opacity-40"
-                  >
-                    # {(thread as unknown as { title: string }).title}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-
-        <div className="flex items-center gap-3 px-4 py-3 border-t border-border flex-shrink-0">
-          {view === "resend" && (
-            <button
-              onClick={() => setView("preview")}
-              className="font-mono text-xs text-muted hover:text-ink transition-colors"
-            >
-              ← Back
-            </button>
-          )}
-          <div className="flex-1" />
-          {view === "preview" && attachment.type === "image" && (
-            <button
-              onClick={handleDownload}
-              className="font-mono text-xs text-muted hover:text-ink transition-colors"
-            >
-              Download
-            </button>
-          )}
-          {view === "preview" && (
-            <button
-              onClick={() => setView("resend")}
-              className="font-mono text-xs bg-ink text-surface px-3 py-1.5 hover:bg-ink/90 transition-colors"
-            >
-              Resend
-            </button>
+              {sentToThread ? (
+                <p className="font-mono text-sm text-ink px-1">Sent!</p>
+              ) : otherThreads.length === 0 ? (
+                <p className="text-xs text-muted px-1">
+                  No other threads in this group.
+                </p>
+              ) : (
+                <div className="space-y-1">
+                  {otherThreads.map((thread) => (
+                    <button
+                      key={thread.id}
+                      onClick={() =>
+                        send.mutate({
+                          threadId: thread.id,
+                          body: "",
+                          attachments: [attachment],
+                        })
+                      }
+                      disabled={send.isPending}
+                      className="w-full text-left px-3 py-2.5 font-mono text-sm text-ink hover:bg-border/40 transition-colors border border-transparent hover:border-border disabled:opacity-40"
+                    >
+                      # {(thread as unknown as { title: string }).title}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           )}
         </div>
       </div>
     </div>
   );
+}
+
+// Fullscreen, zoomable image viewer. Plain tap on a sent image opens this;
+// pinch / wheel / double-tap to zoom, drag to pan when zoomed. No frame, no
+// action chrome — actions live in the hold menu (AttachmentActions).
+function ImageLightbox({
+  attachment,
+  onClose,
+}: {
+  attachment: Attachment;
+  onClose: () => void;
+}) {
+  const [scale, setScale] = useState(1);
+  const [tx, setTx] = useState(0);
+  const [ty, setTy] = useState(0);
+  const dragRef = useRef<{ x: number; y: number; tx: number; ty: number } | null>(
+    null,
+  );
+  const pinchRef = useRef<{ dist: number; scale: number } | null>(null);
+  const movedRef = useRef(false);
+
+  const MAX = 6;
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const applyScale = useCallback((next: number) => {
+    const ns = Math.min(MAX, Math.max(1, next));
+    setScale(ns);
+    if (ns <= 1) {
+      setTx(0);
+      setTy(0);
+    }
+  }, []);
+
+  function onWheel(e: React.WheelEvent) {
+    applyScale(scale - e.deltaY * 0.0015 * scale);
+  }
+
+  function toggleZoom() {
+    if (scale > 1) {
+      setScale(1);
+      setTx(0);
+      setTy(0);
+    } else {
+      setScale(2.5);
+    }
+  }
+
+  function onPointerDown(e: React.PointerEvent) {
+    movedRef.current = false;
+    if (scale <= 1) return;
+    e.preventDefault();
+    dragRef.current = { x: e.clientX, y: e.clientY, tx, ty };
+    (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
+  }
+  function onPointerMove(e: React.PointerEvent) {
+    const d = dragRef.current;
+    if (!d || pinchRef.current) return;
+    const dx = e.clientX - d.x;
+    const dy = e.clientY - d.y;
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) movedRef.current = true;
+    setTx(d.tx + dx);
+    setTy(d.ty + dy);
+  }
+  function onPointerUp() {
+    dragRef.current = null;
+  }
+
+  function onTouchMove(e: React.TouchEvent) {
+    if (e.touches.length === 2) {
+      const [a, b] = [e.touches[0], e.touches[1]];
+      const dist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+      if (pinchRef.current) {
+        applyScale(pinchRef.current.scale * (dist / pinchRef.current.dist));
+      } else {
+        pinchRef.current = { dist, scale };
+      }
+      movedRef.current = true;
+    }
+  }
+  function onTouchEnd(e: React.TouchEvent) {
+    if (e.touches.length < 2) pinchRef.current = null;
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-[70] bg-black/90 flex items-center justify-center overflow-hidden select-none"
+      style={{ touchAction: "none", userSelect: "none", WebkitUserSelect: "none" }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget && !movedRef.current) onClose();
+      }}
+      onWheel={onWheel}
+    >
+      <button
+        onClick={onClose}
+        aria-label="Close"
+        className="absolute top-3 right-3 z-10 font-mono text-2xl leading-none text-white/80 hover:text-white w-11 h-11 flex items-center justify-center"
+      >
+        ×
+      </button>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={attachment.url}
+        alt={attachment.name}
+        draggable={false}
+        onDragStart={(e) => e.preventDefault()}
+        onDoubleClick={toggleZoom}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
+        onTouchMove={onTouchMove}
+        onTouchEnd={onTouchEnd}
+        className="max-w-[100vw] max-h-[100vh] object-contain select-none"
+        style={{
+          transform: `translate(${tx}px, ${ty}px) scale(${scale})`,
+          transition: dragRef.current || pinchRef.current ? "none" : "transform 0.15s ease",
+          cursor: scale > 1 ? "grab" : "zoom-in",
+          touchAction: "none",
+          WebkitTouchCallout: "none",
+        }}
+      />
+    </div>
+  );
+}
+
+// A single sent image rendered as the inline polaroid thumbnail. Tap → open the
+// zoomable lightbox; hold / right-click → open the actions menu.
+function ThreadImage({
+  att,
+  onOpen,
+  onHold,
+}: {
+  att: Attachment;
+  onOpen: () => void;
+  onHold: () => void;
+}) {
+  const press = useImagePress(onOpen, onHold);
+  return (
+    <button
+      {...press}
+      className="text-left transition-all duration-150 hover:scale-[1.03]"
+      style={{
+        background: "var(--background)",
+        padding: "8px 8px 28px 8px",
+        boxShadow:
+          "0 4px 12px rgba(0,0,0,0.18), 0 1px 3px rgba(0,0,0,0.10)",
+        rotate: "1deg",
+        width: "160px",
+        display: "block",
+      }}
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={att.url}
+        alt={att.name}
+        draggable={false}
+        className="w-full object-cover"
+        style={{ aspectRatio: "1/1", display: "block" }}
+        loading="lazy"
+      />
+      <span
+        className="font-mono text-[10px] text-center truncate block mt-2"
+        style={{ color: "#888" }}
+      >
+        {att.name}
+      </span>
+    </button>
+  );
+}
+
+// Tap vs. hold discrimination for images. A plain tap/click fires onTap; a
+// 500ms hold or a right-click fires onHold (and suppresses the following tap).
+// stopPropagation keeps the press off the message row's own long-press/menu.
+function useImagePress(onTap: () => void, onHold: () => void) {
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const start = useRef<{ x: number; y: number } | null>(null);
+  const held = useRef(false);
+
+  const clear = () => {
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = null;
+    start.current = null;
+  };
+
+  return {
+    onPointerDown: (e: React.PointerEvent) => {
+      e.stopPropagation();
+      held.current = false;
+      start.current = { x: e.clientX, y: e.clientY };
+      if (timer.current) clearTimeout(timer.current);
+      timer.current = setTimeout(() => {
+        held.current = true;
+        timer.current = null;
+        onHold();
+      }, 500);
+    },
+    onPointerMove: (e: React.PointerEvent) => {
+      const s = start.current;
+      if (!s) return;
+      if (Math.abs(e.clientX - s.x) > 10 || Math.abs(e.clientY - s.y) > 10) {
+        clear();
+      }
+    },
+    onPointerUp: () => clear(),
+    onPointerLeave: () => clear(),
+    onClick: (e: React.MouseEvent) => {
+      if (held.current) {
+        e.preventDefault();
+        e.stopPropagation();
+        held.current = false;
+        return;
+      }
+      onTap();
+    },
+    onContextMenu: (e: React.MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      clear();
+      held.current = true;
+      onHold();
+    },
+  };
 }
 
 function Avatar({
@@ -936,9 +1122,11 @@ function LinkPreview({ url }: { url: string }) {
 function ImageGallery({
   attachments,
   onOpen,
+  onHold,
 }: {
   attachments: Attachment[];
   onOpen: (att: Attachment) => void;
+  onHold: (att: Attachment) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
@@ -1083,6 +1271,10 @@ function ImageGallery({
               }
               if (expanded) onOpen(att);
               else setExpanded(true);
+            }}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              onHold(att);
             }}
             title={att.name}
             className="block text-left flex-shrink-0 focus:outline-none"
@@ -1527,6 +1719,7 @@ export function ThreadDetail({
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [activeLightbox, setActiveLightbox] = useState<Attachment | null>(null);
+  const [imageActions, setImageActions] = useState<Attachment | null>(null);
   const [activeTooltip, setActiveTooltip] = useState<string | null>(null);
   const tooltipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1614,7 +1807,10 @@ export function ThreadDetail({
   const [mentionIndex, setMentionIndex] = useState(0);
 
   const markReadServer = trpc.threads.markRead.useMutation({
-    onSuccess: () => utils.groups.unread.invalidate(),
+    onSuccess: () => {
+      utils.groups.unread.invalidate();
+      utils.threads.unreadCounts.invalidate({ groupId });
+    },
   });
   const { data: readReceipts = [] } = trpc.threads.reads.useQuery(
     { threadId },
@@ -3512,43 +3708,21 @@ export function ThreadDetail({
                               return (
                                 <div className="mt-2 space-y-2">
                                   {imgAtts.length === 1 && (
-                                    <button
-                                      onClick={() =>
+                                    <ThreadImage
+                                      att={imgAtts[0]}
+                                      onOpen={() =>
                                         setActiveLightbox(imgAtts[0])
                                       }
-                                      className="text-left transition-all duration-150 hover:scale-[1.03]"
-                                      style={{
-                                        background: "var(--background)",
-                                        padding: "8px 8px 28px 8px",
-                                        boxShadow:
-                                          "0 4px 12px rgba(0,0,0,0.18), 0 1px 3px rgba(0,0,0,0.10)",
-                                        rotate: `${(0 % 2 === 0 ? 1 : -1) * (1 + (0 % 3) * 0.5)}deg`,
-                                        width: "160px",
-                                        display: "block",
-                                      }}
-                                    >
-                                      <img
-                                        src={imgAtts[0].url}
-                                        alt={imgAtts[0].name}
-                                        className="w-full object-cover"
-                                        style={{
-                                          aspectRatio: "1/1",
-                                          display: "block",
-                                        }}
-                                        loading="lazy"
-                                      />
-                                      <span
-                                        className="font-mono text-[10px] text-center truncate block mt-2"
-                                        style={{ color: "#888" }}
-                                      >
-                                        {imgAtts[0].name}
-                                      </span>
-                                    </button>
+                                      onHold={() =>
+                                        setImageActions(imgAtts[0])
+                                      }
+                                    />
                                   )}
                                   {imgAtts.length >= 2 && (
                                     <ImageGallery
                                       attachments={imgAtts}
                                       onOpen={setActiveLightbox}
+                                      onHold={setImageActions}
                                     />
                                   )}
                                   {videoAtts.length > 0 && (
@@ -3803,13 +3977,21 @@ export function ThreadDetail({
         />
       )}
 
-      {/* Attachment lightbox */}
+      {/* Tap → zoomable fullscreen image */}
       {activeLightbox && (
-        <AttachmentModal
+        <ImageLightbox
           attachment={activeLightbox}
+          onClose={() => setActiveLightbox(null)}
+        />
+      )}
+
+      {/* Hold → download / resend actions */}
+      {imageActions && (
+        <AttachmentActions
+          attachment={imageActions}
           groupId={groupId}
           currentThreadId={threadId}
-          onClose={() => setActiveLightbox(null)}
+          onClose={() => setImageActions(null)}
         />
       )}
 
