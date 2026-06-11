@@ -538,12 +538,8 @@ export function ThreadList({ groupId, groupName }: { groupId: string; groupName:
                 key={thread.id}
                 href={href}
                 className={`block py-3 border-b border-border transition-all duration-150 ${
-                  isDone
-                    ? "opacity-35"
-                    : dimRead
-                      ? "opacity-60 hover:opacity-100"
-                      : ""
-                } ${isActive ? "bg-pastel-tint/60" : "hover:bg-border/30"}`}
+                  isDone ? "opacity-35" : dimRead ? "opacity-60" : ""
+                } ${isActive ? "bg-pastel-tint/60" : "[@media(hover:hover)]:hover:bg-border/30"}`}
                 style={{
                   borderLeft: `${unread > 0 && !isActive ? "4px" : "3px"} solid ${borderLeftColor}`,
                   paddingLeft: unread > 0 && !isActive ? "14px" : "15px",

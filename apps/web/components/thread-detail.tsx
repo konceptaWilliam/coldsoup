@@ -4374,11 +4374,11 @@ export function ThreadDetail({
               onKeyDown={handleKeyDown}
               placeholder="message"
               rows={1}
-              className="flex-1 min-h-[44px] md:min-h-[40px] max-h-40 border-none bg-transparent px-2.5 py-[10px] font-sans text-base md:text-[13.5px] leading-[1.45] text-ink placeholder:text-muted resize-none outline-none overflow-y-auto"
+              className="flex-1 min-h-[44px] md:min-h-[40px] max-h-[72px] border-none bg-transparent px-2.5 py-[10px] font-sans text-base md:text-[13.5px] leading-[1.45] text-ink placeholder:text-muted resize-none outline-none overflow-y-auto"
               onInput={(e) => {
                 const t = e.currentTarget;
                 t.style.height = "auto";
-                t.style.height = `${Math.min(t.scrollHeight, 160)}px`;
+                t.style.height = `${Math.min(t.scrollHeight, 72)}px`;
               }}
             />
             <button
