@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  web:
+    name: Web — typecheck · lint · test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      # Root workspace install covers apps/web + packages/*.
+      - run: npm ci
+      - run: npm run typecheck --workspace=apps/web
+      - run: npm run lint --workspace=apps/web
+      - run: npm run test --workspace=apps/web
+
+  mobile:
+    name: Mobile — typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/mobile/package-lock.json
+      # apps/mobile is a separate, non-workspace package with its own lockfile.
+      - run: npm ci
+        working-directory: apps/mobile
+      - run: npx tsc --noEmit
+        working-directory: apps/mobile

@@ -40,6 +40,18 @@ export const threadsRouter = router({
         throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: error.message });
       }
 
+      // Blank the body/attachments of a deleted last message so its content
+      // never reaches the client (the UI shows a "deleted" placeholder).
+      for (const th of data ?? []) {
+        const msgs = (th as { messages?: { body: string; attachments: unknown; is_deleted: boolean }[] }).messages;
+        for (const m of msgs ?? []) {
+          if (m.is_deleted) {
+            m.body = "";
+            m.attachments = [];
+          }
+        }
+      }
+
       return data ?? [];
     }),
 

@@ -2,6 +2,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, protectedProcedure } from "../trpc";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { escapeLike } from "@/lib/message-policy";
 
 export const searchRouter = router({
   query: protectedProcedure
@@ -16,6 +17,7 @@ export const searchRouter = router({
       const { supabase, profile } = ctx;
       const admin = createAdminClient();
       const q = input.q.trim();
+      const pattern = `%${escapeLike(q)}%`;
 
       // Get all group IDs this user belongs to
       const { data: memberships } = await supabase
@@ -53,7 +55,7 @@ export const searchRouter = router({
           .from("threads")
           .select("id, title, status, group_id, groups(name)")
           .in("group_id", groupIds)
-          .ilike("title", `%${q}%`)
+          .ilike("title", pattern)
           .order("updated_at", { ascending: false })
           .limit(8);
 
@@ -73,7 +75,8 @@ export const searchRouter = router({
         .from("messages")
         .select("id, body, created_at, thread_id, threads(id, title, group_id, groups(name))")
         .in("thread_id", threadIds)
-        .ilike("body", `%${q}%`)
+        .eq("is_deleted", false)
+        .ilike("body", pattern)
         .order("created_at", { ascending: false })
         .limit(15);
 

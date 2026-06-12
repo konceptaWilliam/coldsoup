@@ -58,6 +58,7 @@ export async function GET(request: Request) {
       .select("*")
       .eq("token", inviteToken)
       .eq("accepted", false)
+      .gt("expires_at", new Date().toISOString())
       .single();
 
     if (invite) {

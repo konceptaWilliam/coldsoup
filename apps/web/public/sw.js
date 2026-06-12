@@ -87,11 +87,16 @@ self.addEventListener("push", (event) => {
           tag,
         });
       }
-      // App-icon badge = number of undismissed notifications.
+      // App-icon badge = real server-computed unread-thread count when the
+      // payload carries it; otherwise fall back to undismissed notifications.
       if (self.navigator.setAppBadge) {
         try {
-          const notes = await self.registration.getNotifications();
-          await self.navigator.setAppBadge(notes.length);
+          const badge =
+            payload.data && typeof payload.data.badge === "number"
+              ? payload.data.badge
+              : (await self.registration.getNotifications()).length;
+          if (badge > 0) await self.navigator.setAppBadge(badge);
+          else if (self.navigator.clearAppBadge) await self.navigator.clearAppBadge();
         } catch (e) {
           // Badging unsupported / failed — ignore.
         }

@@ -2,6 +2,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, protectedProcedure } from "../trpc";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { isValidAttachmentUrl, isMentioned, shouldNotify, type NotifLevel } from "@/lib/message-policy";
 
 // Run background work after the response flushes without Vercel freezing the
 // function mid-flight. Mirrors @vercel/functions' waitUntil by reading Vercel's
@@ -16,34 +17,45 @@ function waitUntil(promise: Promise<unknown>) {
   else void promise.catch(() => {});
 }
 
-const ALLOWED_EXTENSIONS = new Set([
-  "jpg", "jpeg", "png", "gif", "webp",
-  "mp3", "wav", "ogg", "m4a", "aac", "flac",
-  "mp4", "mov", "m4v", "webm",
-  "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "csv", "zip",
-]);
-
-// Matches: /storage/v1/object/public/attachments/<uuid>/<filename>.<ext>
-const ATTACHMENT_PATH_RE = new RegExp(
-  `^/storage/v1/object/public/attachments/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/[^/]+\\.([a-z0-9]+)$`,
-  "i"
-);
-
-function validateAttachmentUrl(url: string): boolean {
-  try {
-    const { hostname, pathname } = new URL(url);
-    const supabaseHost = new URL(process.env.NEXT_PUBLIC_SUPABASE_URL!).hostname;
-    if (hostname !== supabaseHost) return false;
-    const match = ATTACHMENT_PATH_RE.exec(pathname);
-    if (!match) return false;
-    const ext = match[1].toLowerCase();
-    return ALLOWED_EXTENSIONS.has(ext);
-  } catch {
-    return false;
-  }
-}
-
 const REACTION_TYPES = ["👍", "👎", "❤️", "🎉", "😂", "❓"] as const;
+
+// Total unread-thread count for a user across all their groups — a thread is
+// unread when its updated_at is newer than the caller's thread_reads marker.
+// Drives the PWA app-icon badge (sent in the push payload). Same definition as
+// groups.unread, summed across groups.
+async function unreadThreadCount(
+  admin: ReturnType<typeof createAdminClient>,
+  userId: string
+): Promise<number> {
+  const { data: memberships } = await admin
+    .from("group_memberships")
+    .select("group_id")
+    .eq("user_id", userId);
+  const groupIds = (memberships ?? []).map((m) => m.group_id as string);
+  if (groupIds.length === 0) return 0;
+
+  const { data: threads } = await admin
+    .from("threads")
+    .select("id, updated_at")
+    .in("group_id", groupIds);
+  if (!threads || threads.length === 0) return 0;
+
+  const { data: reads } = await admin
+    .from("thread_reads")
+    .select("thread_id, last_read_at")
+    .eq("user_id", userId)
+    .in("thread_id", threads.map((t) => t.id as string));
+  const readAt = new Map(
+    (reads ?? []).map((r) => [r.thread_id as string, new Date(r.last_read_at as string).getTime()])
+  );
+
+  let count = 0;
+  for (const t of threads) {
+    const updated = new Date(t.updated_at as string).getTime();
+    if (updated > (readAt.get(t.id as string) ?? 0)) count++;
+  }
+  return count;
+}
 
 // Describe a body-less message for notification/preview text by its first
 // attachment, matching the thread-list media labels.
@@ -124,7 +136,7 @@ export const messagesRouter = router({
         replyToIds.length > 0
           ? ((await admin
               .from("messages")
-              .select("id, body, profiles(display_name)")
+              .select("id, body, is_deleted, profiles(display_name)")
               .in("id", replyToIds)).data ?? [])
           : [];
 
@@ -133,7 +145,8 @@ export const messagesRouter = router({
           m.id,
           {
             id: m.id,
-            body: (m.body as string).slice(0, 120),
+            // Never surface a deleted message's body, even in a reply quote.
+            body: m.is_deleted ? "" : (m.body as string).slice(0, 120),
             author_name:
               (m.profiles as unknown as { display_name: string } | null)?.display_name ?? "Unknown",
           },
@@ -223,6 +236,10 @@ export const messagesRouter = router({
 
       const messages = [...rows].reverse().map((m) => ({
         ...m,
+        // Soft-deleted: strip body + attachments server-side so the content
+        // never leaves the server (the client only hid it before).
+        body: m.is_deleted ? "" : m.body,
+        attachments: m.is_deleted ? [] : m.attachments,
         reply_to: m.reply_to_id ? (replyToMap.get(m.reply_to_id) ?? null) : null,
         poll: (m.poll_id ? (pollDataMap.get(m.poll_id) ?? null) : null),
         smeter: (m.smeter_id ? (smeterDataMap.get(m.smeter_id) ?? null) : null),
@@ -306,8 +323,9 @@ export const messagesRouter = router({
         }
       }
 
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
       for (const att of input.attachments) {
-        if (!validateAttachmentUrl(att.url)) {
+        if (!isValidAttachmentUrl(att.url, supabaseUrl)) {
           throw new TRPCError({ code: "BAD_REQUEST", message: `Invalid attachment URL: ${att.name}` });
         }
       }
@@ -391,10 +409,7 @@ export const messagesRouter = router({
         const legacyGroupMutedIds = new Set(
           (muteRows ?? []).filter((m) => m.target_id === thread.group_id).map((m) => m.user_id as string)
         );
-        const levelByUser = new Map((levelRows ?? []).map((r) => [r.user_id as string, r.level as string]));
-
-        const bodyLower = input.body.toLowerCase();
-        const mentionsAll = bodyLower.includes("@everyone") || bodyLower.includes("@here");
+        const levelByUser = new Map((levelRows ?? []).map((r) => [r.user_id as string, r.level as NotifLevel]));
 
         type Recipient = { user_id: string; push_token: string | null; mentioned: boolean };
         const recipients: Recipient[] = [];
@@ -405,15 +420,19 @@ export const messagesRouter = router({
             push_token: string | null;
             notifications_paused: boolean;
           } | null;
-          if (prof?.notifications_paused) continue;
 
-          const mentioned =
-            mentionsAll || (!!prof?.display_name && bodyLower.includes(`@${prof.display_name.toLowerCase()}`));
-          const level = levelByUser.get(uid) ?? (legacyGroupMutedIds.has(uid) ? "NONE" : "ALL");
+          const mentioned = isMentioned(input.body, prof?.display_name);
+          const level: NotifLevel = levelByUser.get(uid) ?? (legacyGroupMutedIds.has(uid) ? "NONE" : "ALL");
 
-          if (level === "NONE") continue;
-          if (level === "MENTIONS" && !mentioned) continue;
-          if (threadMutedIds.has(uid) && !mentioned) continue;
+          if (
+            !shouldNotify({
+              paused: !!prof?.notifications_paused,
+              level,
+              threadMuted: threadMutedIds.has(uid),
+              mentioned,
+            })
+          )
+            continue;
 
           recipients.push({ user_id: uid, push_token: prof?.push_token ?? null, mentioned });
         }
@@ -463,6 +482,16 @@ export const messagesRouter = router({
               .in("user_id", eligibleUserIds);
             if (subs && subs.length > 0) {
               const { sendWebPush } = await import("@/lib/web-push");
+              // Real per-user unread-thread count → drives the PWA app-icon
+              // badge (instead of the SW counting undismissed notifications).
+              const subscribedUserIds = Array.from(new Set(subs.map((s) => s.user_id as string)));
+              const badgeByUser = new Map(
+                await Promise.all(
+                  subscribedUserIds.map(
+                    async (uid) => [uid, await unreadThreadCount(admin, uid)] as const
+                  )
+                )
+              );
               // Collapse on the thread (not the message id): multiple messages
               // in the same thread replace into ONE OS notification showing the
               // latest, instead of stacking N notifications.
@@ -470,7 +499,11 @@ export const messagesRouter = router({
                 title: mentionedUserIds.has(userId) ? `@ ${senderName} mentioned you` : senderName,
                 body: `${location}\n${previewBody}`,
                 tag: `thread-${input.threadId}`,
-                data: { threadId: input.threadId, groupId: thread.group_id },
+                data: {
+                  threadId: input.threadId,
+                  groupId: thread.group_id,
+                  badge: badgeByUser.get(userId) ?? 0,
+                },
               });
               const results = await Promise.all(
                 subs.map((s) =>
