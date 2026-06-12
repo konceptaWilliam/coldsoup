@@ -4,22 +4,33 @@ import { router, protectedProcedure } from "../trpc";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 const targetTypeSchema = z.enum(["thread", "group"]);
+const levelSchema = z.enum(["ALL", "MENTIONS", "NONE"]);
 
 export const notificationsRouter = router({
-  // The caller's current mutes + global pause flag.
+  // The caller's current mutes, per-group levels + global pause flag.
   prefs: protectedProcedure.query(async ({ ctx }) => {
     const { profile } = ctx;
     const admin = createAdminClient();
 
-    const [{ data: muteRows }, { data: prof }] = await Promise.all([
+    const [{ data: muteRows }, { data: levelRows }, { data: prof }] = await Promise.all([
       admin.from("mutes").select("target_type, target_id").eq("user_id", profile.id),
+      admin.from("group_notification_prefs").select("group_id, level").eq("user_id", profile.id),
       admin.from("profiles").select("notifications_paused").eq("id", profile.id).single(),
     ]);
+
+    const groupLevels: Record<string, "ALL" | "MENTIONS" | "NONE"> = {};
+    for (const r of levelRows ?? []) {
+      groupLevels[r.group_id as string] = r.level as "ALL" | "MENTIONS" | "NONE";
+    }
 
     return {
       paused: !!prof?.notifications_paused,
       threadIds: (muteRows ?? []).filter((m) => m.target_type === "thread").map((m) => m.target_id as string),
-      groupIds: (muteRows ?? []).filter((m) => m.target_type === "group").map((m) => m.target_id as string),
+      // Back-compat: "muted groups" = groups at level NONE (drives bell-off icons).
+      groupIds: Object.entries(groupLevels)
+        .filter(([, lvl]) => lvl === "NONE")
+        .map(([id]) => id),
+      groupLevels,
     };
   }),
 
@@ -28,6 +39,22 @@ export const notificationsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const { profile } = ctx;
       const admin = createAdminClient();
+
+      // Group "mute" now maps onto the level model: muted = NONE, unmuted = ALL.
+      if (input.targetType === "group") {
+        const { error } = input.muted
+          ? await admin.from("group_notification_prefs").upsert(
+              { user_id: profile.id, group_id: input.targetId, level: "NONE" },
+              { onConflict: "user_id,group_id" }
+            )
+          : await admin
+              .from("group_notification_prefs")
+              .delete()
+              .eq("user_id", profile.id)
+              .eq("group_id", input.targetId);
+        if (error) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: error.message });
+        return { success: true };
+      }
 
       if (input.muted) {
         const { error } = await admin
@@ -46,6 +73,30 @@ export const notificationsRouter = router({
           .eq("target_id", input.targetId);
         if (error) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: error.message });
       }
+
+      return { success: true };
+    }),
+
+  // Three-way per-group notification level. ALL is the default — stored as the
+  // absence of a row so the table stays sparse.
+  setGroupLevel: protectedProcedure
+    .input(z.object({ groupId: z.string().uuid(), level: levelSchema }))
+    .mutation(async ({ ctx, input }) => {
+      const { profile } = ctx;
+      const admin = createAdminClient();
+
+      const { error } =
+        input.level === "ALL"
+          ? await admin
+              .from("group_notification_prefs")
+              .delete()
+              .eq("user_id", profile.id)
+              .eq("group_id", input.groupId)
+          : await admin.from("group_notification_prefs").upsert(
+              { user_id: profile.id, group_id: input.groupId, level: input.level },
+              { onConflict: "user_id,group_id" }
+            );
+      if (error) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: error.message });
 
       return { success: true };
     }),

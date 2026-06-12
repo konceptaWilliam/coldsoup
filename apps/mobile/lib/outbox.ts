@@ -10,6 +10,9 @@ export type OutboxEntry = {
   attachments: MessageAttachment[];
   replyToId?: string;
   created_at: string;
+  // Original send's client_id — reused on retry so a send the server actually
+  // accepted (but whose response was lost) can't duplicate.
+  clientId?: string;
 };
 
 const prefix = "coldsoup:outbox:";

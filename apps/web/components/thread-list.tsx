@@ -145,7 +145,7 @@ function GroupInfoModal({ groupId, groupName, onClose }: { groupId: string; grou
 
   const myMembership = members.find((m) => m.id === profile?.id);
   const isAdmin = myMembership?.role === "ADMIN";
-  const isGroupMuted = !!notifPrefs?.groupIds.includes(groupId);
+  const groupLevel: "ALL" | "MENTIONS" | "NONE" = notifPrefs?.groupLevels?.[groupId] ?? "ALL";
 
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(groupName);
@@ -177,16 +177,19 @@ function GroupInfoModal({ groupId, groupName, onClose }: { groupId: string; grou
     onSuccess: () => { utils.messages.groupMembers.invalidate({ groupId }); onClose(); },
   });
 
-  const setMute = trpc.notifications.setMute.useMutation({
-    onMutate: async ({ targetId, muted }) => {
+  const setGroupLevel = trpc.notifications.setGroupLevel.useMutation({
+    onMutate: async ({ groupId: gid, level }) => {
       await utils.notifications.prefs.cancel();
       const prev = utils.notifications.prefs.getData();
       utils.notifications.prefs.setData(undefined, (old) => {
         if (!old) return old;
-        const set = new Set(old.groupIds);
-        if (muted) set.add(targetId);
-        else set.delete(targetId);
-        return { ...old, groupIds: Array.from(set) };
+        const groupLevels = { ...old.groupLevels };
+        if (level === "ALL") delete groupLevels[gid];
+        else groupLevels[gid] = level;
+        const groupIds = Object.entries(groupLevels)
+          .filter(([, lvl]) => lvl === "NONE")
+          .map(([id]) => id);
+        return { ...old, groupLevels, groupIds };
       });
       return { prev };
     },
@@ -234,13 +237,34 @@ function GroupInfoModal({ groupId, groupName, onClose }: { groupId: string; grou
           <div className="space-y-4">
             <div>
               <p className="font-mono text-[10px] text-muted uppercase tracking-wider mb-2">Notifications</p>
-              <button
-                onClick={() => setMute.mutate({ targetType: "group", targetId: groupId, muted: !isGroupMuted })}
-                disabled={setMute.isPending}
-                className="w-full border border-border bg-surface-2 px-3 py-2 font-mono text-[12px] text-ink hover:border-border-strong transition-colors disabled:opacity-40"
-              >
-                {isGroupMuted ? "Unmute group" : "Mute group"}
-              </button>
+              <div className="grid grid-cols-3 gap-1.5">
+                {(
+                  [
+                    { key: "ALL", label: "All" },
+                    { key: "MENTIONS", label: "Mentions" },
+                    { key: "NONE", label: "None" },
+                  ] as const
+                ).map((opt) => {
+                  const active = groupLevel === opt.key;
+                  return (
+                    <button
+                      key={opt.key}
+                      onClick={() => { if (!active) setGroupLevel.mutate({ groupId, level: opt.key }); }}
+                      aria-pressed={active}
+                      className={`min-h-8 border font-mono text-[10px] uppercase tracking-[0.12em] transition-colors ${
+                        active
+                          ? "bg-ink text-surface border-ink"
+                          : "bg-surface-2 text-muted border-border hover:text-ink hover:border-border-strong"
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="mt-1.5 text-[11px] text-muted-2">
+                Mentions = only @you, @everyone and @here notify.
+              </p>
             </div>
 
             {/* Invite section (admin only) */}

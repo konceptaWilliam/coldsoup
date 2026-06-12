@@ -6,6 +6,7 @@ import { Feather } from "@expo/vector-icons";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { useTranslation } from "react-i18next";
 import { trpc } from "@/lib/trpc";
+import { supabase } from "@/lib/supabase";
 import { StatusBadge } from "@/components/StatusBadge";
 import { GroupDrawer } from "@/components/GroupDrawer";
 import { EdgeSwipeArea } from "@/components/EdgeSwipeArea";
@@ -104,6 +105,25 @@ export default function GroupScreen() {
   }, [groupId, groupName]);
   const { data: me } = trpc.profile.get.useQuery();
   const { data: threads, isLoading, refetch, isRefetching } = trpc.threads.list.useQuery({ groupId });
+  const utils = trpc.useUtils();
+
+  // Live thread list: every new message bumps threads.updated_at, and
+  // creates/status changes/deletes hit the threads table directly — one
+  // group-scoped subscription keeps the list, previews and unread dots fresh
+  // without pull-to-refresh. Mirrors the web thread-list subscription.
+  useEffect(() => {
+    if (!groupId) return;
+    const channel = supabase
+      .channel(`threads:group:${groupId}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "threads", filter: `group_id=eq.${groupId}` },
+        () => utils.threads.list.invalidate({ groupId })
+      )
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groupId]);
   const { data: notifPrefs } = trpc.notifications.prefs.useQuery();
   const createThread = trpc.threads.create.useMutation({
     onSuccess: () => {

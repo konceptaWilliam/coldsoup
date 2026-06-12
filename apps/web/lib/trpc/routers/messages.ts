@@ -3,6 +3,19 @@ import { TRPCError } from "@trpc/server";
 import { router, protectedProcedure } from "../trpc";
 import { createAdminClient } from "@/lib/supabase/admin";
 
+// Run background work after the response flushes without Vercel freezing the
+// function mid-flight. Mirrors @vercel/functions' waitUntil by reading Vercel's
+// request-context symbol; off-Vercel (dev / self-host) the Node process is
+// long-lived, so a plain fire-and-forget is safe.
+function waitUntil(promise: Promise<unknown>) {
+  const ctx = (globalThis as Record<symbol, unknown>)[
+    Symbol.for("@vercel/request-context")
+  ] as { get?: () => { waitUntil?: (p: Promise<unknown>) => void } } | undefined;
+  const fn = ctx?.get?.()?.waitUntil;
+  if (fn) fn(promise);
+  else void promise.catch(() => {});
+}
+
 const ALLOWED_EXTENSIONS = new Set([
   "jpg", "jpeg", "png", "gif", "webp",
   "mp3", "wav", "ogg", "m4a", "aac", "flac",
@@ -271,6 +284,28 @@ export const messagesRouter = router({
 
       if (!membership) throw new TRPCError({ code: "FORBIDDEN" });
 
+      // Idempotent retry: if this client_id already landed (response lost,
+      // client resent), return the existing row instead of inserting a dupe.
+      if (input.clientId) {
+        const { data: existing } = await admin
+          .from("messages")
+          .select("id, body, created_at, edited_at, is_deleted, thread_id, user_id, client_id, attachments, reply_to_id, poll_id, smeter_id, system_event, profiles(id, display_name, avatar_url)")
+          .eq("thread_id", input.threadId)
+          .eq("client_id", input.clientId)
+          .eq("user_id", profile.id)
+          .maybeSingle();
+        if (existing) {
+          return {
+            ...existing,
+            reply_to: null,
+            poll: null,
+            smeter: null,
+            system_event: null,
+            reactions: REACTION_TYPES.map((type) => ({ type, count: 0, userReacted: false, users: [] })),
+          };
+        }
+      }
+
       for (const att of input.attachments) {
         if (!validateAttachmentUrl(att.url)) {
           throw new TRPCError({ code: "BAD_REQUEST", message: `Invalid attachment URL: ${att.name}` });
@@ -315,33 +350,75 @@ export const messagesRouter = router({
         }
       }
 
-      // Send push notifications to other group members, skipping anyone who has
-      // paused notifications or muted this thread or its group.
+      // Send push notifications to other group members. Recipient rules:
+      //   - notifications_paused: never notify
+      //   - group level NONE: never notify (hard mute)
+      //   - group level MENTIONS: notify only when mentioned
+      //   - group level ALL (default): notify, except thread-muted — and a
+      //     mention bypasses the thread mute.
+      // "Mentioned" = @<display name>, @everyone or @here in the body.
       const senderName = (data?.profiles as unknown as { display_name: string } | null)?.display_name ?? "Someone";
-      if (thread) {
+      // Defer the entire push fan-out (member/mute/level queries + Expo + Web
+      // Push) to after the response flushes — send latency no longer scales
+      // with group size.
+      if (thread) waitUntil((async () => {
         const { data: members } = await admin
           .from("group_memberships")
-          .select("user_id, profiles(push_token, notifications_paused)")
+          .select("user_id, profiles(display_name, push_token, notifications_paused)")
           .eq("group_id", thread.group_id)
           .neq("user_id", profile.id);
 
         const memberIds = (members ?? []).map((m) => m.user_id as string);
-        const { data: muteRows } = memberIds.length > 0
-          ? await admin
-              .from("mutes")
-              .select("user_id")
-              .in("user_id", memberIds)
-              .in("target_id", [input.threadId, thread.group_id])
-          : { data: [] as { user_id: string }[] };
-        const mutedUserIds = new Set((muteRows ?? []).map((m) => m.user_id as string));
+        const [{ data: muteRows }, { data: levelRows }] = memberIds.length > 0
+          ? await Promise.all([
+              admin
+                .from("mutes")
+                .select("user_id, target_id")
+                .in("user_id", memberIds)
+                .in("target_id", [input.threadId, thread.group_id]),
+              admin
+                .from("group_notification_prefs")
+                .select("user_id, level")
+                .in("user_id", memberIds)
+                .eq("group_id", thread.group_id),
+            ])
+          : [{ data: [] as { user_id: string; target_id: string }[] }, { data: [] as { user_id: string; level: string }[] }];
 
-        // Eligible recipients: group members who are not muted and not paused.
-        const eligible = (members ?? []).filter((m) => {
-          if (mutedUserIds.has(m.user_id as string)) return false;
-          const prof = m.profiles as unknown as { notifications_paused: boolean } | null;
-          return !prof?.notifications_paused;
-        });
-        const eligibleUserIds = eligible.map((m) => m.user_id as string);
+        const threadMutedIds = new Set(
+          (muteRows ?? []).filter((m) => m.target_id === input.threadId).map((m) => m.user_id as string)
+        );
+        // Legacy group-mute rows (pre-migration) count as level NONE.
+        const legacyGroupMutedIds = new Set(
+          (muteRows ?? []).filter((m) => m.target_id === thread.group_id).map((m) => m.user_id as string)
+        );
+        const levelByUser = new Map((levelRows ?? []).map((r) => [r.user_id as string, r.level as string]));
+
+        const bodyLower = input.body.toLowerCase();
+        const mentionsAll = bodyLower.includes("@everyone") || bodyLower.includes("@here");
+
+        type Recipient = { user_id: string; push_token: string | null; mentioned: boolean };
+        const recipients: Recipient[] = [];
+        for (const m of members ?? []) {
+          const uid = m.user_id as string;
+          const prof = m.profiles as unknown as {
+            display_name: string;
+            push_token: string | null;
+            notifications_paused: boolean;
+          } | null;
+          if (prof?.notifications_paused) continue;
+
+          const mentioned =
+            mentionsAll || (!!prof?.display_name && bodyLower.includes(`@${prof.display_name.toLowerCase()}`));
+          const level = levelByUser.get(uid) ?? (legacyGroupMutedIds.has(uid) ? "NONE" : "ALL");
+
+          if (level === "NONE") continue;
+          if (level === "MENTIONS" && !mentioned) continue;
+          if (threadMutedIds.has(uid) && !mentioned) continue;
+
+          recipients.push({ user_id: uid, push_token: prof?.push_token ?? null, mentioned });
+        }
+        const eligibleUserIds = recipients.map((r) => r.user_id);
+        const mentionedUserIds = new Set(recipients.filter((r) => r.mentioned).map((r) => r.user_id));
 
         const previewBody = input.body.slice(0, 100) || describeAttachments(input.attachments);
 
@@ -356,19 +433,19 @@ export const messagesRouter = router({
         const location = `.${groupName}#${threadTitle}`;
 
         // --- Expo push (mobile app) ---
-        const tokens = eligible
-          .map((m) => m.profiles as unknown as { push_token: string | null } | null)
-          .filter((p): p is { push_token: string } => Boolean(p?.push_token))
-          .map((p) => p.push_token);
-
-        if (tokens.length > 0) {
-          const pushMessages = tokens.map((token) => ({
-            to: token,
-            title: senderName,
+        // Mentions get a distinct title so they stand out on the lock screen.
+        const pushMessages = recipients
+          .filter((r) => r.push_token)
+          .map((r) => ({
+            to: r.push_token as string,
+            title: r.mentioned ? `@ ${senderName} mentioned you` : senderName,
             subtitle: location,
             body: previewBody,
+            priority: r.mentioned ? ("high" as const) : ("default" as const),
             data: { threadId: input.threadId, groupId: thread.group_id },
           }));
+
+        if (pushMessages.length > 0) {
           fetch("https://exp.host/--/api/v2/push/send", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -377,30 +454,29 @@ export const messagesRouter = router({
         }
 
         // --- Web Push (PWA) ---
-        // Awaited (not fire-and-forget): on Vercel, async work after the
-        // response returns can be terminated, dropping the push.
+        // Inside waitUntil(): runs post-response but stays alive on Vercel.
         if (eligibleUserIds.length > 0) {
           try {
             const { data: subs } = await admin
               .from("push_subscriptions")
-              .select("endpoint, p256dh, auth")
+              .select("user_id, endpoint, p256dh, auth")
               .in("user_id", eligibleUserIds);
             if (subs && subs.length > 0) {
               const { sendWebPush } = await import("@/lib/web-push");
-              const payload = {
-                // Collapse on the thread (not the message id): multiple messages
-                // in the same thread replace into ONE OS notification showing the
-                // latest, instead of stacking N notifications.
-                title: senderName,
+              // Collapse on the thread (not the message id): multiple messages
+              // in the same thread replace into ONE OS notification showing the
+              // latest, instead of stacking N notifications.
+              const payloadFor = (userId: string) => ({
+                title: mentionedUserIds.has(userId) ? `@ ${senderName} mentioned you` : senderName,
                 body: `${location}\n${previewBody}`,
                 tag: `thread-${input.threadId}`,
                 data: { threadId: input.threadId, groupId: thread.group_id },
-              };
+              });
               const results = await Promise.all(
                 subs.map((s) =>
                   sendWebPush(
                     { endpoint: s.endpoint as string, p256dh: s.p256dh as string, auth: s.auth as string },
-                    payload
+                    payloadFor(s.user_id as string)
                   ).then((r) => ({ endpoint: s.endpoint as string, r }))
                 )
               );
@@ -413,7 +489,7 @@ export const messagesRouter = router({
             // best-effort; never block message send
           }
         }
-      }
+      })());
 
       return {
         ...data,

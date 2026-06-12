@@ -25,7 +25,8 @@ const MIME_BY_EXT: Record<string, string> = {
 };
 
 // RFC4122-ish v4, lowercase hex + hyphens — matches the server's attachment path regex.
-function uuid(): string {
+// Also used as the message client_id for optimistic-send dedup.
+export function uuid(): string {
   return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
     const r = (Math.random() * 16) | 0;
     const v = c === "x" ? r : (r & 0x3) | 0x8;

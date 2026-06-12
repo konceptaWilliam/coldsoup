@@ -1733,6 +1733,11 @@ export function ThreadDetail({
   const [activeMessageMenuId, setActiveMessageMenuId] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
+  // Flash highlight for jump-to-message (reply quotes, search deep-links).
+  const [jumpFlashId, setJumpFlashId] = useState<string | null>(null);
+  const jumpBusyRef = useRef(false);
+  // Aggregate attachment upload progress, 0..1 (null = not uploading).
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [hasNewMessages, setHasNewMessages] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -1811,6 +1816,13 @@ export function ThreadDetail({
       utils.groups.unread.invalidate();
       utils.threads.unreadCounts.invalidate({ groupId });
     },
+  });
+
+  // One-tap reopen from the closed-thread banner (optimistic; the status
+  // control reflects threadStatus so it follows along).
+  const reopenFromBanner = trpc.threads.updateStatus.useMutation({
+    onError: () => setThreadStatus("DONE"),
+    onSettled: () => utils.threads.list.invalidate({ groupId }),
   });
   const { data: readReceipts = [] } = trpc.threads.reads.useQuery(
     { threadId },
@@ -2155,6 +2167,15 @@ export function ThreadDetail({
         isInitialLoad.current = false;
         return;
       }
+      // Target lives in an older, not-yet-loaded page (search results often
+      // do) — page history in until it appears instead of silently giving up.
+      handledHighlightRef.current = highlightMessageId;
+      isNearBottomRef.current = false;
+      prevMsgCountRef.current = count;
+      prevLatestMessageIdRef.current = latestMessage.id;
+      isInitialLoad.current = false;
+      void jumpToMessage(highlightMessageId);
+      return;
     }
 
     if (isInitialLoad.current) {
@@ -2678,32 +2699,142 @@ export function ThreadDetail({
     }
   }
 
+  // Scroll a message into view, paging in older history when it isn't loaded
+  // yet — reply quotes and search deep-links often point at old messages.
+  async function jumpToMessage(messageId: string) {
+    const flash = () => {
+      setJumpFlashId(messageId);
+      window.setTimeout(
+        () => setJumpFlashId((cur) => (cur === messageId ? null : cur)),
+        3000,
+      );
+    };
+    const el = document.getElementById(`message-${messageId}`);
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      flash();
+      return;
+    }
+    if (jumpBusyRef.current || messages.length === 0) return;
+    jumpBusyRef.current = true;
+    setIsLoadingMore(true);
+    try {
+      let more = hasMore;
+      let cursor: string | undefined = messages[0]?.created_at;
+      let found = false;
+      // Bounded: at most 20 pages (~1000 messages) per jump.
+      for (let i = 0; i < 20 && more && cursor && !found; i++) {
+        const result = (await utils.messages.list.fetch({ threadId, cursor })) as unknown as {
+          messages: Message[];
+          hasMore: boolean;
+        };
+        const older = result.messages;
+        more = result.hasMore;
+        if (older.length === 0) break;
+        cursor = older[0].created_at;
+        found = older.some((m) => m.id === messageId);
+        for (const m of older) noAnimateIds.current.add(m.id);
+        setMessages((prev) => [...older, ...prev]);
+      }
+      setHasMore(more);
+      if (found) {
+        // Two frames: let React commit the prepended rows first.
+        requestAnimationFrame(() =>
+          requestAnimationFrame(() => {
+            document
+              .getElementById(`message-${messageId}`)
+              ?.scrollIntoView({ behavior: "smooth", block: "center" });
+            flash();
+          }),
+        );
+      }
+    } catch {
+      // network hiccup — user can tap the quote again
+    } finally {
+      setIsLoadingMore(false);
+      jumpBusyRef.current = false;
+    }
+  }
+
+  // Raw XHR against the storage REST endpoint — supabase-js upload() exposes
+  // no progress events, and a 100 MB video behind a bare spinner feels hung.
+  function xhrUpload(
+    url: string,
+    file: File,
+    headers: Record<string, string>,
+    onProgress: (loadedBytes: number) => void,
+  ): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", url);
+      for (const [k, v] of Object.entries(headers)) xhr.setRequestHeader(k, v);
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) onProgress(e.loaded);
+      };
+      xhr.onload = () =>
+        xhr.status >= 200 && xhr.status < 300
+          ? resolve()
+          : reject(new Error(`Upload failed (${xhr.status})`));
+      xhr.onerror = () => reject(new Error("Upload failed"));
+      xhr.send(file);
+    });
+  }
+
   async function uploadFiles(files: File[]): Promise<Attachment[]> {
     const supabase = createClient();
     const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) throw new Error("Not authenticated");
+      data: { session },
+    } = await supabase.auth.getSession();
+    const user = session?.user;
+    if (!session || !user) throw new Error("Not authenticated");
 
-    return Promise.all(
-      files.map(async (raw) => {
-        const file = await resizeImageIfNeeded(raw);
-        const ext = file.name.split(".").pop() ?? "bin";
-        const path = `${user.id}/${crypto.randomUUID()}.${ext}`;
-        const { error } = await supabase.storage
-          .from("attachments")
-          .upload(path, file, { contentType: file.type });
-        if (error) throw error;
-        const {
-          data: { publicUrl },
-        } = supabase.storage.from("attachments").getPublicUrl(path);
-        return {
-          url: publicUrl,
-          type: attachmentTypeFor(raw),
-          name: raw.name,
-        };
-      }),
+    // Resize first so progress is measured against the bytes actually sent.
+    const prepared = await Promise.all(
+      files.map(async (raw) => ({ raw, file: await resizeImageIfNeeded(raw) })),
     );
+    const totalBytes = prepared.reduce((s, p) => s + p.file.size, 0) || 1;
+    const loadedBytes = prepared.map(() => 0);
+    const report = () =>
+      setUploadProgress(
+        Math.min(0.99, loadedBytes.reduce((a, b) => a + b, 0) / totalBytes),
+      );
+    setUploadProgress(0);
+
+    const baseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+    const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+    try {
+      return await Promise.all(
+        prepared.map(async ({ raw, file }, i) => {
+          const ext = file.name.split(".").pop() ?? "bin";
+          const path = `${user.id}/${crypto.randomUUID()}.${ext}`;
+          await xhrUpload(
+            `${baseUrl}/storage/v1/object/attachments/${path}`,
+            file,
+            {
+              authorization: `Bearer ${session.access_token}`,
+              apikey: anonKey,
+              "content-type": file.type || "application/octet-stream",
+              "cache-control": "max-age=3600",
+              "x-upsert": "false",
+            },
+            (loaded) => {
+              loadedBytes[i] = loaded;
+              report();
+            },
+          );
+          const {
+            data: { publicUrl },
+          } = supabase.storage.from("attachments").getPublicUrl(path);
+          return {
+            url: publicUrl,
+            type: attachmentTypeFor(raw),
+            name: raw.name,
+          };
+        }),
+      );
+    } finally {
+      setUploadProgress(null);
+    }
   }
 
   function stopTyping() {
@@ -2892,6 +3023,35 @@ export function ThreadDetail({
         setMentionQuery(null);
         return;
       }
+    }
+    if (e.key === "Escape" && replyingTo) {
+      e.preventDefault();
+      setReplyingTo(null);
+      return;
+    }
+    // ↑ in an empty composer edits your last message (standard chat idiom).
+    if (e.key === "ArrowUp" && !e.shiftKey && body.trim() === "" && !editingMessageId) {
+      const last = [...messages]
+        .reverse()
+        .find(
+          (m) =>
+            !!myInfo?.id &&
+            m.user_id === myInfo.id &&
+            !m.is_deleted &&
+            !m.delivery_status &&
+            !!m.body,
+        );
+      if (last) {
+        e.preventDefault();
+        setEditingMessageId(last.id);
+        setEditBody(last.body);
+        requestAnimationFrame(() =>
+          document
+            .getElementById(`message-${last.id}`)
+            ?.scrollIntoView({ behavior: "smooth", block: "nearest" }),
+        );
+      }
+      return;
     }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -3413,7 +3573,7 @@ export function ThreadDetail({
                             if (!noAnimateIds.current.has(msg.id)) {
                               parts.push("fadeUp 360ms ease-out both");
                             }
-                            if (msg.id === highlightMessageId) {
+                            if (msg.id === highlightMessageId || msg.id === jumpFlashId) {
                               parts.push("messageHighlight 2.4s 400ms ease-out forwards");
                             }
                             return parts.length ? parts.join(", ") : undefined;
@@ -3492,16 +3652,7 @@ export function ThreadDetail({
                             {msg.reply_to && !msg.is_deleted && (
                               <button
                                 className="flex items-start gap-1.5 mb-1 border-l-2 border-border pl-2 text-left w-full hover:border-ink/40 transition-colors group/reply"
-                                onClick={() => {
-                                  const el = document.getElementById(
-                                    `message-${msg.reply_to!.id}`,
-                                  );
-                                  if (el)
-                                    el.scrollIntoView({
-                                      behavior: "smooth",
-                                      block: "center",
-                                    });
-                                }}
+                                onClick={() => void jumpToMessage(msg.reply_to!.id)}
                               >
                                 <div className="min-w-0">
                                   <span className="font-mono text-[12px] text-muted font-semibold">
@@ -4204,10 +4355,21 @@ export function ThreadDetail({
         )}
 
         {isDone && (
-          <div className="flex items-center justify-center gap-2 py-2.5 mb-0 border border-done-tint bg-done-tint/50">
+          <div className="flex items-center justify-center gap-3 py-2.5 mb-0 border border-done-tint bg-done-tint/50">
             <span className="font-mono text-[11px] text-done-ink uppercase tracking-[0.12em]">
-              thread closed — reopen to send messages
+              thread closed
             </span>
+            <button
+              onClick={() => {
+                setThreadStatus("OPEN");
+                reopenFromBanner.mutate({ threadId, status: "OPEN" });
+                requestAnimationFrame(() => textareaRef.current?.focus());
+              }}
+              disabled={reopenFromBanner.isPending}
+              className="font-mono text-[11px] uppercase tracking-[0.12em] px-2.5 py-1 border border-border-strong text-ink bg-surface hover:bg-border/40 transition-colors disabled:opacity-40"
+            >
+              reopen to reply
+            </button>
           </div>
         )}
         {!isDone && (sendMessage.error || uploadError) && (
@@ -4263,6 +4425,21 @@ export function ThreadDetail({
                 </button>
               </div>
             ))}
+          </div>
+        )}
+
+        {/* Upload progress */}
+        {!isDone && uploadProgress !== null && (
+          <div className="mb-2 flex items-center gap-2">
+            <div className="flex-1 h-1 bg-border overflow-hidden">
+              <div
+                className="h-full bg-ink transition-[width] duration-150 ease-out"
+                style={{ width: `${Math.round(uploadProgress * 100)}%` }}
+              />
+            </div>
+            <span className="font-mono text-[10px] text-muted tabular-nums w-9 text-right">
+              {Math.round(uploadProgress * 100)}%
+            </span>
           </div>
         )}
 
@@ -4396,7 +4573,13 @@ export function ThreadDetail({
                   : "bg-border text-muted-2 cursor-not-allowed"
               }`}
             >
-              {uploading ? "↑" : sendMessage.isPending ? "…" : "send"}
+              {uploading
+                ? uploadProgress !== null
+                  ? `${Math.round(uploadProgress * 100)}%`
+                  : "↑"
+                : sendMessage.isPending
+                  ? "…"
+                  : "send"}
             </button>
           </div>
         )}

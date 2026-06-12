@@ -35,17 +35,20 @@ export default function MembersScreen() {
 
   const { data: invites } = trpc.invites.list.useQuery({ groupId }, { enabled: amAdmin });
   const { data: notifPrefs } = trpc.notifications.prefs.useQuery();
-  const isGroupMuted = !!notifPrefs?.groupIds.includes(groupId);
-  const setMute = trpc.notifications.setMute.useMutation({
-    onMutate: async ({ targetType, targetId, muted }) => {
+  const groupLevel: "ALL" | "MENTIONS" | "NONE" = notifPrefs?.groupLevels?.[groupId] ?? "ALL";
+  const setGroupLevel = trpc.notifications.setGroupLevel.useMutation({
+    onMutate: async ({ groupId: gid, level }) => {
       await utils.notifications.prefs.cancel();
       const prev = utils.notifications.prefs.getData();
       utils.notifications.prefs.setData(undefined, (old) => {
         if (!old) return old;
-        const key = targetType === "thread" ? "threadIds" : "groupIds";
-        const set = new Set(old[key]);
-        if (muted) set.add(targetId); else set.delete(targetId);
-        return { ...old, [key]: Array.from(set) };
+        const groupLevels = { ...old.groupLevels };
+        if (level === "ALL") delete groupLevels[gid];
+        else groupLevels[gid] = level;
+        const groupIds = Object.entries(groupLevels)
+          .filter(([, lvl]) => lvl === "NONE")
+          .map(([id]) => id);
+        return { ...old, groupLevels, groupIds };
       });
       return { prev };
     },
@@ -217,17 +220,53 @@ export default function MembersScreen() {
         }
         ListFooterComponent={
           <View style={{ paddingHorizontal: 16, paddingTop: 24, gap: 10 }}>
-            <Pressable
-              onPress={() => { haptics.selection(); setMute.mutate({ targetType: "group", targetId: groupId, muted: !isGroupMuted }); }}
-              accessibilityRole="button"
-              accessibilityLabel={isGroupMuted ? t("a11y.unmuteGroup") : t("a11y.muteGroup")}
-              style={({ pressed }) => ({ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, borderWidth: 1, borderColor: c.border, backgroundColor: c.surface2, paddingVertical: 12, opacity: pressed ? 0.6 : 1 })}
-            >
-              <Feather name={isGroupMuted ? "bell-off" : "bell"} size={14} color={c.ink} />
-              <Text style={{ fontFamily: "monospace", fontSize: 12, color: c.ink, letterSpacing: 0.5 }}>
-                {isGroupMuted ? t("a11y.unmuteGroup") : t("a11y.muteGroup")}
+            <View>
+              <Text style={{ fontFamily: "monospace", fontSize: 10, fontWeight: "500", color: c.muted, letterSpacing: 1.5, textTransform: "uppercase", marginBottom: 8 }}>
+                {t("groupSettings.notifications")}
               </Text>
-            </Pressable>
+              <View style={{ flexDirection: "row", gap: 6 }}>
+                {([
+                  { key: "ALL" as const, label: t("groupSettings.notifAll"), icon: "bell" as const },
+                  { key: "MENTIONS" as const, label: t("groupSettings.notifMentions"), icon: "at-sign" as const },
+                  { key: "NONE" as const, label: t("groupSettings.notifNone"), icon: "bell-off" as const },
+                ]).map((opt) => {
+                  const active = groupLevel === opt.key;
+                  return (
+                    <Pressable
+                      key={opt.key}
+                      onPress={() => {
+                        if (active) return;
+                        haptics.selection();
+                        setGroupLevel.mutate({ groupId, level: opt.key });
+                      }}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: active }}
+                      accessibilityLabel={opt.label}
+                      style={({ pressed }) => ({
+                        flex: 1,
+                        minHeight: 44,
+                        flexDirection: "row",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        gap: 6,
+                        borderWidth: 1,
+                        borderColor: active ? c.ink : c.border,
+                        backgroundColor: active ? c.ink : c.surface2,
+                        opacity: pressed ? 0.6 : 1,
+                      })}
+                    >
+                      <Feather name={opt.icon} size={12} color={active ? c.surface : c.muted} />
+                      <Text style={{ fontFamily: "monospace", fontSize: 10, letterSpacing: 0.5, textTransform: "uppercase", color: active ? c.surface : c.muted }}>
+                        {opt.label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+              <Text style={{ fontSize: 11, color: c.muted2, marginTop: 6 }}>
+                {t("groupSettings.notifHint")}
+              </Text>
+            </View>
             {amAdmin && (
               <Pressable
                 onPress={() => { setRenameValue(name ?? ""); setShowRename(true); }}

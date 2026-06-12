@@ -18,7 +18,7 @@ import * as DocumentPicker from "expo-document-picker";
 import * as Clipboard from "expo-clipboard";
 import { trpc } from "@/lib/trpc";
 import { supabase } from "@/lib/supabase";
-import { uploadAttachment, type PickedAsset } from "@/lib/attachments";
+import { uploadAttachment, uuid, type PickedAsset } from "@/lib/attachments";
 import { useUnread } from "@/lib/unread";
 import { getDraft, setDraft, clearDraft } from "@/lib/drafts";
 import { getOutbox, setOutbox, type OutboxEntry } from "@/lib/outbox";
@@ -88,6 +88,10 @@ export default function ThreadScreen() {
     { groupId: groupId ?? "" },
     { enabled: !!groupId }
   );
+  // Latest members snapshot for the realtime handler (channel effect only
+  // depends on threadId; a ref avoids resubscribing when members load).
+  const membersRef = useRef(members);
+  membersRef.current = members;
   const memberNames = (members ?? []).map((m) => m.display_name);
   const mentionTokens = [...memberNames, ...MENTION_SPECIALS];
   const specialSuggestions =
@@ -158,37 +162,83 @@ export default function ThreadScreen() {
       }
     );
 
+  // Append a message to the newest page unless it's already in the cache
+  // (matched by id, or by client_id for our own optimistic temp bubble — in
+  // which case the temp entry is replaced in place). No refetch involved.
+  const upsertMessage = (msg: ListMessage) => {
+    utils.messages.list.setInfiniteData({ threadId, limit: 50 }, (old) => {
+      if (!old) return old;
+      const exists = old.pages.some((pg) =>
+        pg.messages.some(
+          (m) => m.id === msg.id || (!!msg.client_id && m.client_id === msg.client_id)
+        )
+      );
+      const newPages = [...old.pages];
+      if (exists) {
+        return {
+          ...old,
+          pages: newPages.map((pg) => ({
+            ...pg,
+            messages: pg.messages.map((m) =>
+              m.id === msg.id || (!!msg.client_id && m.client_id === msg.client_id) ? msg : m
+            ),
+          })),
+        };
+      }
+      newPages[0] = { ...newPages[0], messages: [...newPages[0].messages, msg] };
+      return { ...old, pages: newPages };
+    });
+  };
+
   const sendMessage = trpc.messages.send.useMutation({
-    onMutate: async ({ body: msgBody, attachments }) => {
+    onMutate: async ({ body: msgBody, attachments, clientId, replyToId }) => {
       const tempMsg = {
-        id: `temp-${Date.now()}`,
+        id: `temp-${clientId ?? Date.now()}`,
         body: msgBody,
         created_at: new Date().toISOString(),
         edited_at: null,
         is_deleted: false,
         thread_id: threadId,
         user_id: me?.id ?? "me",
+        client_id: clientId ?? null,
         attachments: attachments ?? [],
-        reply_to_id: null,
+        reply_to_id: replyToId ?? null,
         poll_id: null,
-        reply_to: null,
+        smeter_id: null,
+        reply_to: replyToId && replyingTo
+          ? { id: replyToId, body: replyingTo.body.slice(0, 120), author_name: replyingTo.author }
+          : null,
         poll: null,
+        smeter: null,
+        system_event: null,
         reactions: [],
         profiles: me
           ? { id: me.id, display_name: me.display_name, avatar_url: me.avatar_url }
           : { id: "me", display_name: "", avatar_url: null },
       };
-      utils.messages.list.setInfiniteData({ threadId, limit: 50 }, (old) => {
-        if (!old) return old;
-        const newPages = [...old.pages];
-        newPages[0] = {
-          ...newPages[0],
-          messages: [...newPages[0].messages, tempMsg as unknown as (typeof newPages)[0]["messages"][number]],
-        };
-        return { ...old, pages: newPages };
-      });
+      upsertMessage(tempMsg as unknown as ListMessage);
+    },
+    onSuccess: (data) => {
+      // Swap the temp bubble for the server row in place — no refetch.
+      if (data) upsertMessage(data as unknown as ListMessage);
+      // Refresh the group's thread list so its last-message preview updates.
+      utils.threads.list.invalidate();
     },
     onError: (_err, variables) => {
+      // Drop the temp bubble; the failed-send row takes over.
+      utils.messages.list.setInfiniteData({ threadId, limit: 50 }, (old) =>
+        old
+          ? {
+              ...old,
+              pages: old.pages.map((pg) => ({
+                ...pg,
+                messages: pg.messages.filter(
+                  (m) => !(variables.clientId && m.client_id === variables.clientId && m.id.startsWith("temp-"))
+                ),
+              })),
+            }
+          : old
+      );
       setFailed((prev) => [
         ...prev,
         {
@@ -197,13 +247,9 @@ export default function ThreadScreen() {
           attachments: variables.attachments ?? [],
           replyToId: variables.replyToId,
           created_at: new Date().toISOString(),
+          clientId: variables.clientId,
         },
       ]);
-    },
-    onSettled: () => {
-      utils.messages.list.invalidate({ threadId });
-      // Refresh the group's thread list so its last-message preview updates.
-      utils.threads.list.invalidate();
     },
   });
 
@@ -320,7 +366,49 @@ export default function ThreadScreen() {
       .on(
         "postgres_changes",
         { event: "INSERT", schema: "public", table: "messages", filter: `thread_id=eq.${threadId}` },
-        () => utils.messages.list.invalidate({ threadId })
+        (payload) => {
+          const row = payload.new as {
+            id: string;
+            body: string;
+            created_at: string;
+            edited_at: string | null;
+            is_deleted: boolean;
+            thread_id: string;
+            user_id: string;
+            client_id: string | null;
+            attachments: unknown;
+            reply_to_id: string | null;
+            poll_id: string | null;
+            smeter_id: string | null;
+            system_event: unknown;
+          };
+          // Rows that need joined data (poll/smeter/system/reply context) and
+          // senders we can't resolve locally still go through a refetch.
+          const sender = (membersRef.current ?? []).find((m) => m.id === row.user_id);
+          if (row.poll_id || row.smeter_id || row.system_event || row.reply_to_id || !sender) {
+            utils.messages.list.invalidate({ threadId });
+            return;
+          }
+          upsertMessage({
+            ...row,
+            attachments: row.attachments ?? [],
+            reply_to: null,
+            poll: null,
+            smeter: null,
+            system_event: null,
+            reactions: [],
+            profiles: { id: sender.id, display_name: sender.display_name, avatar_url: sender.avatar_url },
+          } as unknown as ListMessage);
+        }
+      )
+      .on(
+        // Other members' edits and deletes, patched into the cache directly.
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "messages", filter: `thread_id=eq.${threadId}` },
+        (payload) => {
+          const row = payload.new as { id: string; body: string; edited_at: string | null; is_deleted: boolean };
+          patchMessage(row.id, (m) => ({ ...m, body: row.body, edited_at: row.edited_at, is_deleted: row.is_deleted }));
+        }
       )
       .on(
         "postgres_changes",
@@ -459,7 +547,7 @@ export default function ThreadScreen() {
       if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
       clearDraft(threadId);
       haptics.tapLight();
-      sendMessage.mutate({ threadId, body: trimmed, attachments, replyToId });
+      sendMessage.mutate({ threadId, body: trimmed, attachments, replyToId, clientId: uuid() });
     } catch (e) {
       const msg = e instanceof Error ? e.message : t("thread.sendFailed");
       if (Platform.OS === "web") { if (typeof window !== "undefined") window.alert(msg); }
@@ -522,7 +610,15 @@ export default function ThreadScreen() {
   function retryFailed(entry: FailedEntry) {
     setFailed((prev) => prev.filter((f) => f.failId !== entry.failId));
     haptics.tapLight();
-    sendMessage.mutate({ threadId, body: entry.body, attachments: entry.attachments, replyToId: entry.replyToId });
+    // Reuse the original client_id so a send the server already accepted
+    // (response lost) dedupes instead of duplicating.
+    sendMessage.mutate({
+      threadId,
+      body: entry.body,
+      attachments: entry.attachments,
+      replyToId: entry.replyToId,
+      clientId: entry.clientId ?? uuid(),
+    });
   }
 
   function dismissFailed(failId: string) {

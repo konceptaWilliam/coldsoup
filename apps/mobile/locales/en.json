@@ -103,7 +103,12 @@
     "leave": "Leave group",
     "leaveTitle": "Leave group",
     "leaveBody": "Leave {{name}}? You will lose access to its threads.",
-    "leaveFailed": "Could not leave group"
+    "leaveFailed": "Could not leave group",
+    "notifications": "Notifications",
+    "notifAll": "All",
+    "notifMentions": "Mentions",
+    "notifNone": "None",
+    "notifHint": "Mentions = only @you, @everyone and @here notify."
   },
   "invite": {
     "title": "Invite member",
