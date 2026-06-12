@@ -3054,6 +3054,8 @@ export function ThreadDetail({
       return;
     }
     if (e.key === "Enter" && !e.shiftKey) {
+      // On touch devices, Enter inserts a newline; send via the button instead.
+      if (window.matchMedia("(pointer: coarse)").matches) return;
       e.preventDefault();
       handleSend();
     }
@@ -3690,6 +3692,11 @@ export function ThreadDetail({
                                       setEditBody("");
                                     }
                                     if (e.key === "Enter" && !e.shiftKey) {
+                                      if (
+                                        window.matchMedia("(pointer: coarse)")
+                                          .matches
+                                      )
+                                        return;
                                       e.preventDefault();
                                       handleEditSubmit(msg.id);
                                     }
