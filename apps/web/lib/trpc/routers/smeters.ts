@@ -8,15 +8,26 @@ import { postSystemMessage } from "@/lib/system-messages";
 // ISO date (YYYY-MM-DD), as the standalone planner stores custom dates.
 const ISO_DATE = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Invalid date");
 
-function expectedDays(mode: string, customDates: string[] | null): number {
-  return mode === "dates" && customDates ? customDates.length : 7;
+type SMeterMode = "weekly" | "dates" | "statements";
+
+// Number of votable cards: custom dates / statements carry their own count,
+// weekly is always the 7-day grid.
+function expectedDays(
+  mode: string,
+  customDates: string[] | null,
+  customLabels: string[] | null,
+): number {
+  if (mode === "dates" && customDates) return customDates.length;
+  if (mode === "statements" && customLabels) return customLabels.length;
+  return 7;
 }
 
 type SMeterSummary = {
   id: string;
-  mode: "weekly" | "dates";
+  mode: SMeterMode;
   title: string | null;
   customDates: string[] | null;
+  customLabels: string[] | null;
   votedCount: number;
   memberCount: number;
   allVoted: boolean;
@@ -104,7 +115,7 @@ export const smetersRouter = router({
 
       const { data: smeterRows } = await admin
         .from("smeters")
-        .select("id, thread_id, mode, custom_dates, title, participant_ids")
+        .select("id, thread_id, mode, custom_dates, custom_labels, title, participant_ids")
         .in("id", input.smeterIds);
       if (!smeterRows || smeterRows.length === 0) return {};
 
@@ -150,9 +161,10 @@ export const smetersRouter = router({
         const memberCount = participants.length;
         result[s.id as string] = {
           id: s.id as string,
-          mode: (s.mode as "weekly" | "dates") ?? "weekly",
+          mode: (s.mode as SMeterMode) ?? "weekly",
           title: (s.title as string | null) ?? null,
           customDates: (s.custom_dates as string[] | null) ?? null,
+          customLabels: (s.custom_labels as string[] | null) ?? null,
           votedCount: voters.size,
           memberCount,
           allVoted: memberCount > 0 && voters.size === memberCount,
@@ -169,14 +181,18 @@ export const smetersRouter = router({
       z
         .object({
           threadId: z.string().uuid(),
-          mode: z.enum(["weekly", "dates"]).default("weekly"),
+          mode: z.enum(["weekly", "dates", "statements"]).default("weekly"),
           customDates: z.array(ISO_DATE).min(1).max(60).optional(),
+          customLabels: z.array(z.string().min(1).max(200)).min(1).max(60).optional(),
           title: z.string().min(1).max(200).optional(),
           // Subset of group members to include. Omitted = everyone.
           participantIds: z.array(z.string().uuid()).min(1).max(200).optional(),
         })
         .refine((d) => d.mode !== "dates" || (d.customDates && d.customDates.length >= 1), {
           message: "customDates required for dates mode",
+        })
+        .refine((d) => d.mode !== "statements" || (d.customLabels && d.customLabels.length >= 1), {
+          message: "customLabels required for statements mode",
         })
     )
     .mutation(async ({ ctx, input }) => {
@@ -199,6 +215,7 @@ export const smetersRouter = router({
       if (!membership) throw new TRPCError({ code: "FORBIDDEN" });
 
       const customDates = input.mode === "dates" ? input.customDates ?? null : null;
+      const customLabels = input.mode === "statements" ? input.customLabels ?? null : null;
 
       // Resolve participants to an explicit list: all current group members,
       // optionally narrowed to the requested subset. Always store the set so a
@@ -218,6 +235,7 @@ export const smetersRouter = router({
           thread_id: input.threadId,
           mode: input.mode,
           custom_dates: customDates,
+          custom_labels: customLabels,
           title: input.title ?? null,
           participant_ids: participantIds,
           created_by: profile.id,
@@ -289,7 +307,7 @@ export const smetersRouter = router({
 
       const { data: smeter } = await admin
         .from("smeters")
-        .select("id, thread_id, mode, custom_dates, participant_ids, title, created_by")
+        .select("id, thread_id, mode, custom_dates, custom_labels, participant_ids, title, created_by")
         .eq("id", input.smeterId)
         .single();
       if (!smeter) throw new TRPCError({ code: "NOT_FOUND" });
@@ -311,7 +329,11 @@ export const smetersRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: "Not a participant" });
       }
 
-      const expected = expectedDays(smeter.mode as string, smeter.custom_dates as string[] | null);
+      const expected = expectedDays(
+        smeter.mode as string,
+        smeter.custom_dates as string[] | null,
+        smeter.custom_labels as string[] | null,
+      );
 
       // Exactly one score per day, every day, indices in range — no partial submits.
       const indices = input.responses.map((r) => r.dayIndex);
@@ -421,7 +443,7 @@ export const smetersRouter = router({
 
       const { data: smeter } = await admin
         .from("smeters")
-        .select("id, thread_id, mode, custom_dates, title, participant_ids, created_by, created_at")
+        .select("id, thread_id, mode, custom_dates, custom_labels, title, participant_ids, created_by, created_at")
         .eq("id", input.smeterId)
         .single();
       if (!smeter) throw new TRPCError({ code: "NOT_FOUND" });
@@ -439,7 +461,8 @@ export const smetersRouter = router({
 
       const mode = smeter.mode as string;
       const customDates = (smeter.custom_dates as string[] | null) ?? null;
-      const expected = expectedDays(mode, customDates);
+      const customLabels = (smeter.custom_labels as string[] | null) ?? null;
+      const expected = expectedDays(mode, customDates, customLabels);
 
       const [{ data: memberRows }, { data: responseRows }] = await Promise.all([
         admin.from("group_memberships").select("profiles(id, display_name, avatar_url)").eq("group_id", thread.group_id),
@@ -489,8 +512,9 @@ export const smetersRouter = router({
 
       return {
         id: smeter.id as string,
-        mode: mode as "weekly" | "dates",
+        mode: mode as SMeterMode,
         customDates,
+        customLabels,
         title: (smeter.title as string | null) ?? null,
         members,
         memberCount,

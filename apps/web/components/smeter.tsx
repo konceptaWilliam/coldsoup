@@ -9,13 +9,14 @@ import type { AppRouter } from "@/lib/trpc/router";
 // S-meter keeps its own neo-brutalist skin (yellow / hard black borders /
 // offset shadows) — a deliberate "app-in-app" ported from rehearsal-pain-planner.
 
-type SMeterMode = "weekly" | "dates";
+type SMeterMode = "weekly" | "dates" | "statements";
 
 export type SMeterSummary = {
   id: string;
   mode: SMeterMode;
   title: string | null;
   customDates: string[] | null;
+  customLabels: string[] | null;
   votedCount: number;
   memberCount: number;
   allVoted: boolean;
@@ -51,11 +52,15 @@ function clampScore(v: number) {
 function formatCustomDate(iso: string) {
   return new Date(iso + "T12:00:00").toLocaleDateString("en", { day: "numeric", month: "short" });
 }
-function dayLabel(idx: number, customDates: string[] | null) {
+// Card labels: statements carry free text, dates format to "5 Jun", weekly
+// falls back to weekday names. customLabels takes precedence when present.
+function dayLabel(idx: number, customDates: string[] | null, customLabels?: string[] | null) {
+  if (customLabels && customLabels[idx]) return customLabels[idx];
   if (customDates && customDates[idx]) return formatCustomDate(customDates[idx]);
   return DAY_NAMES[idx] ?? `Day ${idx + 1}`;
 }
-function dayShort(idx: number, customDates: string[] | null) {
+function dayShort(idx: number, customDates: string[] | null, customLabels?: string[] | null) {
+  if (customLabels && customLabels[idx]) return customLabels[idx];
   if (customDates && customDates[idx]) return formatCustomDate(customDates[idx]);
   return DAY_SHORT[idx] ?? `D${idx + 1}`;
 }
@@ -108,7 +113,7 @@ export function SMeterCard({ smeter, threadId }: { smeter: SMeterSummary; thread
         <div className="flex items-center justify-between mb-2">
           <span className="font-mono text-[10px] font-extrabold tracking-[0.15em] text-black">S-METER</span>
           <span className="border-2 border-black bg-yellow-300 px-1.5 py-px font-mono text-[9px] font-extrabold tracking-wider text-black">
-            {smeter.mode === "dates" ? "DATES" : "WEEKLY"}
+            {smeter.mode === "dates" ? "DATES" : smeter.mode === "statements" ? "STATEMENTS" : "WEEKLY"}
           </span>
         </div>
         <p className="font-mono text-[15px] font-extrabold text-black mb-2">{smeter.title || "Find a day"}</p>
@@ -259,7 +264,12 @@ function VotingView({
   isPending: boolean;
   onSubmit: (r: { dayIndex: number; painScore: number }[]) => void;
 }) {
-  const total = data.mode === "dates" && data.customDates ? data.customDates.length : 7;
+  const total =
+    data.mode === "dates" && data.customDates
+      ? data.customDates.length
+      : data.mode === "statements" && data.customLabels
+        ? data.customLabels.length
+        : 7;
   const [day, setDay] = useState(0);
   const [scores, setScores] = useState<Record<number, number>>({});
   const current = scores[day] ?? null;
@@ -281,7 +291,7 @@ function VotingView({
 
       <div className="border-2 border-black bg-white shadow-[4px_4px_0_black] p-4">
         <h3 className="font-mono text-base font-extrabold text-black text-center mb-4">
-          How does {dayLabel(day, data.customDates)} work for you?
+          How does {dayLabel(day, data.customDates, data.customLabels)} work for you?
         </h3>
         <div className="grid grid-cols-3 gap-3 justify-items-center">
           {[1, 2, 3, 4, 5, 6].map((s) => (
@@ -364,6 +374,7 @@ function WaitingView({ data }: { data: GetData }) {
 function StatsView({ data, stats }: { data: GetData; stats: NonNullable<GetData["stats"]> }) {
   const [selected, setSelected] = useState(stats.bestDay);
   const cd = data.customDates;
+  const cl = data.customLabels;
   const best = stats.days[stats.bestDay];
   const worst = stats.days[stats.worstDay];
   const sel = stats.days[selected];
@@ -373,7 +384,7 @@ function StatsView({ data, stats }: { data: GetData; stats: NonNullable<GetData[
       <div className="grid grid-cols-2 gap-3">
         <div className="border-2 border-black bg-green-400 shadow-[4px_4px_0_black] p-3">
           <p className="font-mono text-[10px] font-extrabold uppercase tracking-wide text-black mb-1">Best day</p>
-          <p className="font-mono text-[14px] font-extrabold text-black">{dayLabel(best.dayIndex, cd)}</p>
+          <p className="font-mono text-[14px] font-extrabold text-black">{dayLabel(best.dayIndex, cd, cl)}</p>
           <div className="flex items-center gap-2 mt-2">
             <PainFace value={clampScore(best.avg)} size="md" />
             <span className="font-mono text-xl font-extrabold text-black">{best.avg.toFixed(1)}</span>
@@ -381,7 +392,7 @@ function StatsView({ data, stats }: { data: GetData; stats: NonNullable<GetData[
         </div>
         <div className="border-2 border-black bg-red-300 shadow-[4px_4px_0_black] p-3">
           <p className="font-mono text-[10px] font-extrabold uppercase tracking-wide text-black mb-1">Worst day</p>
-          <p className="font-mono text-[14px] font-extrabold text-black">{dayLabel(worst.dayIndex, cd)}</p>
+          <p className="font-mono text-[14px] font-extrabold text-black">{dayLabel(worst.dayIndex, cd, cl)}</p>
           <div className="flex items-center gap-2 mt-2">
             <PainFace value={clampScore(worst.avg)} size="md" />
             <span className="font-mono text-xl font-extrabold text-black">{worst.avg.toFixed(1)}</span>
@@ -407,7 +418,7 @@ function StatsView({ data, stats }: { data: GetData; stats: NonNullable<GetData[
               }}
             >
               <span className="font-mono text-[9px] font-extrabold text-black truncate w-full text-center">
-                {dayShort(d.dayIndex, cd).slice(0, 6)}
+                {dayShort(d.dayIndex, cd, cl).slice(0, 6)}
               </span>
               <PainFace value={clampScore(d.avg)} size="sm" />
               <span className="font-mono text-[9px] font-bold text-black">{d.avg.toFixed(1)}</span>
@@ -416,7 +427,7 @@ function StatsView({ data, stats }: { data: GetData; stats: NonNullable<GetData[
         })}
       </div>
 
-      {sel && <DayDetail day={sel} title={dayLabel(sel.dayIndex, cd)} />}
+      {sel && <DayDetail day={sel} title={dayLabel(sel.dayIndex, cd, cl)} />}
     </div>
   );
 }
@@ -468,6 +479,7 @@ export function SMeterCreateModal({
   onSubmit: (
     mode: SMeterMode,
     customDates: string[] | undefined,
+    customLabels: string[] | undefined,
     title: string | undefined,
     participantIds: string[] | undefined,
   ) => void;
@@ -478,12 +490,18 @@ export function SMeterCreateModal({
   const [title, setTitle] = useState("");
   const [dates, setDates] = useState<string[]>([]);
   const [dateInput, setDateInput] = useState("");
+  const [labels, setLabels] = useState<string[]>([]);
+  const [labelInput, setLabelInput] = useState("");
   // Everyone included by default; clicking a block toggles them out/in.
   const [excluded, setExcluded] = useState<Set<string>>(new Set());
 
   const included = members.filter((m) => !excluded.has(m.id));
   const canSubmit =
-    !isPending && (mode === "weekly" || dates.length >= 1) && included.length >= 1;
+    !isPending &&
+    (mode === "weekly" ||
+      (mode === "dates" && dates.length >= 1) ||
+      (mode === "statements" && labels.length >= 1)) &&
+    included.length >= 1;
 
   function toggle(id: string) {
     setExcluded((prev) => {
@@ -500,6 +518,13 @@ export function SMeterCreateModal({
     setDateInput("");
   }
 
+  function addLabel() {
+    const v = labelInput.trim();
+    if (!v || labels.includes(v) || labels.length >= 60) return;
+    setLabels((prev) => [...prev, v]);
+    setLabelInput("");
+  }
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40"
@@ -511,20 +536,20 @@ export function SMeterCreateModal({
         <div className="space-y-4">
           <div>
             <label className="block font-mono text-[10px] font-bold text-neutral-600 uppercase tracking-wider mb-1.5">Type</label>
-            <div className="grid grid-cols-2 gap-2">
-              {(["weekly", "dates"] as SMeterMode[]).map((m) => (
+            <div className="grid grid-cols-3 gap-2">
+              {(["weekly", "dates", "statements"] as SMeterMode[]).map((m) => (
                 <button
                   key={m}
                   type="button"
                   onClick={() => setMode(m)}
-                  className="border-2 border-black py-3 font-mono text-[12px] font-extrabold text-black transition-all"
+                  className="border-2 border-black py-3 font-mono text-[11px] font-extrabold text-black transition-all"
                   style={
                     mode === m
                       ? { background: "#FDE047", transform: "translate(2px,2px)" }
                       : { background: "#fff", boxShadow: "2px 2px 0 black" }
                   }
                 >
-                  {m === "weekly" ? "Weekly" : "Custom dates"}
+                  {m === "weekly" ? "Weekly" : m === "dates" ? "Dates" : "Statements"}
                 </button>
               ))}
             </div>
@@ -555,6 +580,47 @@ export function SMeterCreateModal({
                     <span key={d} className="border-2 border-black bg-white px-2 py-1 font-mono text-[12px] font-bold text-black flex items-center gap-1">
                       {formatCustomDate(d)}
                       <button type="button" onClick={() => setDates((prev) => prev.filter((x) => x !== d))} className="font-extrabold">
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {mode === "statements" && (
+            <div>
+              <label className="block font-mono text-[10px] font-bold text-neutral-600 uppercase tracking-wider mb-1.5">Add statements</label>
+              <div className="flex gap-2">
+                <input
+                  value={labelInput}
+                  onChange={(e) => setLabelInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      addLabel();
+                    }
+                  }}
+                  maxLength={200}
+                  placeholder="e.g. Pizza on Friday"
+                  className="flex-1 border-2 border-black bg-white px-3 py-2 text-base md:text-[13px] text-black placeholder:text-neutral-500 focus:outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={addLabel}
+                  disabled={!labelInput.trim() || labels.includes(labelInput.trim()) || labels.length >= 60}
+                  className="border-2 border-black bg-white shadow-[2px_2px_0_black] px-3 font-mono text-[12px] font-bold text-black hover:shadow-none hover:translate-x-[2px] hover:translate-y-[2px] transition-all disabled:opacity-40"
+                >
+                  + Add
+                </button>
+              </div>
+              {labels.length > 0 && (
+                <div className="flex flex-wrap gap-2 mt-2">
+                  {labels.map((l) => (
+                    <span key={l} className="border-2 border-black bg-white px-2 py-1 font-mono text-[12px] font-bold text-black flex items-center gap-1 max-w-full">
+                      <span className="truncate">{l}</span>
+                      <button type="button" onClick={() => setLabels((prev) => prev.filter((x) => x !== l))} className="font-extrabold flex-shrink-0">
                         ×
                       </button>
                     </span>
@@ -613,6 +679,7 @@ export function SMeterCreateModal({
                 onSubmit(
                   mode,
                   mode === "dates" ? dates : undefined,
+                  mode === "statements" ? labels : undefined,
                   title.trim() || undefined,
                   included.length === members.length ? undefined : included.map((m) => m.id),
                 )

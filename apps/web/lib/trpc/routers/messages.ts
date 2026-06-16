@@ -194,9 +194,10 @@ export const messagesRouter = router({
       const smeterIds = Array.from(new Set(rows.filter((m) => m.smeter_id).map((m) => m.smeter_id!)));
       type SMeterSummary = {
         id: string;
-        mode: "weekly" | "dates";
+        mode: "weekly" | "dates" | "statements";
         title: string | null;
         customDates: string[] | null;
+        customLabels: string[] | null;
         votedCount: number;
         memberCount: number;
         allVoted: boolean;
@@ -207,7 +208,7 @@ export const messagesRouter = router({
       if (smeterIds.length > 0) {
         const [{ data: groupMemberRows }, { data: smeterRows }, { data: smeterResponseRows }] = await Promise.all([
           admin.from("group_memberships").select("user_id").eq("group_id", thread.group_id),
-          admin.from("smeters").select("id, mode, custom_dates, title, participant_ids").in("id", smeterIds),
+          admin.from("smeters").select("id, mode, custom_dates, custom_labels, title, participant_ids").in("id", smeterIds),
           admin.from("smeter_responses").select("smeter_id, user_id").in("smeter_id", smeterIds),
         ]);
         const allMemberIds = (groupMemberRows ?? []).map((m) => m.user_id as string);
@@ -223,9 +224,10 @@ export const messagesRouter = router({
           const members = participants.length;
           smeterDataMap.set(s.id as string, {
             id: s.id as string,
-            mode: (s.mode as "weekly" | "dates") ?? "weekly",
+            mode: (s.mode as "weekly" | "dates" | "statements") ?? "weekly",
             title: (s.title as string | null) ?? null,
             customDates: (s.custom_dates as string[] | null) ?? null,
+            customLabels: (s.custom_labels as string[] | null) ?? null,
             votedCount: voters.size,
             memberCount: members,
             allVoted: members > 0 && voters.size === members,
