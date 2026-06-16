@@ -116,7 +116,7 @@ export function SMeterCard({ smeter, threadId }: { smeter: SMeterSummary; thread
             {smeter.mode === "dates" ? "DATES" : smeter.mode === "statements" ? "STATEMENTS" : "WEEKLY"}
           </span>
         </div>
-        <p className="font-mono text-[15px] font-extrabold text-black mb-2">{smeter.title || "Find a day"}</p>
+        <p className="font-mono text-[15px] font-extrabold text-black mb-2">{smeter.title || "figure it out"}</p>
         <div className="flex gap-1 mb-2">
           {[1, 2, 3, 4, 5, 6].map((v) => <PainFace key={v} value={v} size="sm" />)}
         </div>
@@ -291,7 +291,9 @@ function VotingView({
 
       <div className="border-2 border-black bg-white shadow-[4px_4px_0_black] p-4">
         <h3 className="font-mono text-base font-extrabold text-black text-center mb-4">
-          How does {dayLabel(day, data.customDates, data.customLabels)} work for you?
+          {data.mode === "statements"
+            ? `Statement: ${dayLabel(day, data.customDates, data.customLabels)}`
+            : `How does ${dayLabel(day, data.customDates, data.customLabels)} work for you?`}
         </h3>
         <div className="grid grid-cols-3 gap-3 justify-items-center">
           {[1, 2, 3, 4, 5, 6].map((s) => (
