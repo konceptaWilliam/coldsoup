@@ -10,6 +10,7 @@ import { pollsRouter } from "./routers/polls";
 import { smetersRouter } from "./routers/smeters";
 import { notificationsRouter } from "./routers/notifications";
 import { linksRouter } from "./routers/links";
+import { calendarRouter } from "./routers/calendar";
 
 export const appRouter = router({
   groups: groupsRouter,
@@ -23,6 +24,7 @@ export const appRouter = router({
   smeters: smetersRouter,
   notifications: notificationsRouter,
   links: linksRouter,
+  calendar: calendarRouter,
 });
 
 export type AppRouter = typeof appRouter;

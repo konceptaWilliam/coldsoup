@@ -7,6 +7,7 @@ import { trpc } from "@/lib/trpc/client";
 import { createClient } from "@/lib/supabase/client";
 import { StatusBadge } from "./status-badge";
 import { NewThreadDialog } from "./new-thread-dialog";
+import { GroupCalendar } from "./group-calendar";
 import { useUnread, getLastSeen, setLastSeen } from "@/lib/unread-context";
 import { useMobileSidebar } from "@/lib/mobile-sidebar-context";
 
@@ -367,6 +368,7 @@ export function ThreadList({ groupId, groupName }: { groupId: string; groupName:
   const pathname = usePathname();
   const [showNewThread, setShowNewThread] = useState(false);
   const [showGroupInfo, setShowGroupInfo] = useState(false);
+  const [showCalendar, setShowCalendar] = useState(false);
   const [filter, setFilter] = useState<ThreadFilter>("ALL");
   const utils = trpc.useUtils();
   const { threadCounts, setThreadCount } = useUnread();
@@ -483,6 +485,20 @@ export function ThreadList({ groupId, groupName }: { groupId: string; groupName:
             className="font-mono text-sm font-semibold text-ink flex-1 truncate min-w-0 text-left hover:text-muted transition-colors"
           >
             <span className="text-muted-2">· </span><span className="lowercase">{groupName}</span>
+          </button>
+
+          <button
+            onClick={() => setShowCalendar(true)}
+            aria-label="Group calendar"
+            title="Group calendar"
+            className="w-11 h-11 md:w-8 md:h-8 flex items-center justify-center text-muted hover:text-ink border border-border hover:border-border-strong transition-colors flex-shrink-0"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <rect x="3" y="4" width="18" height="18" rx="0" />
+              <path d="M3 10h18" />
+              <path d="M8 2v4" />
+              <path d="M16 2v4" />
+            </svg>
           </button>
 
           <button
@@ -660,6 +676,10 @@ export function ThreadList({ groupId, groupName }: { groupId: string; groupName:
 
       {showNewThread && (
         <NewThreadDialog groupId={groupId} onClose={() => setShowNewThread(false)} />
+      )}
+
+      {showCalendar && (
+        <GroupCalendar groupId={groupId} groupName={groupName} onClose={() => setShowCalendar(false)} />
       )}
     </section>
   );
