@@ -596,13 +596,15 @@ export const messagesRouter = router({
         .maybeSingle();
 
       if (existing) {
-        await admin.from("message_reactions").delete().eq("id", existing.id);
+        const { error } = await admin.from("message_reactions").delete().eq("id", existing.id);
+        if (error) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: error.message });
       } else {
-        await admin.from("message_reactions").insert({
+        const { error } = await admin.from("message_reactions").insert({
           message_id: input.messageId,
           user_id: profile.id,
           type: input.type,
         });
+        if (error) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: error.message });
       }
 
       return { success: true };
