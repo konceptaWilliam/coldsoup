@@ -2059,6 +2059,13 @@ export function ThreadDetail({
     onError: () => {
       utils.messages.list.invalidate({ threadId });
     },
+    // Optimistic state lives only in local `setMessages`; the query cache keeps
+    // the pre-reaction load. With staleTime 30s, a quick leave/return serves
+    // that stale cache and the reaction vanishes. Invalidate so the cache
+    // re-reads the persisted reaction from the server.
+    onSettled: () => {
+      utils.messages.list.invalidate({ threadId });
+    },
   });
 
   const deleteMessage = trpc.messages.deleteMessage.useMutation({
@@ -2069,6 +2076,11 @@ export function ThreadDetail({
       );
     },
     onError: () => {
+      utils.messages.list.invalidate({ threadId });
+    },
+    // Local-only optimistic edit; sync the query cache so a quick leave/return
+    // within staleTime doesn't resurrect the deleted message from stale cache.
+    onSettled: () => {
       utils.messages.list.invalidate({ threadId });
     },
   });
@@ -2084,6 +2096,11 @@ export function ThreadDetail({
       );
       setEditingMessageId(null);
       setEditBody("");
+    },
+    // Sync the query cache so a quick leave/return within staleTime doesn't show
+    // the pre-edit body from stale cache.
+    onSettled: () => {
+      utils.messages.list.invalidate({ threadId });
     },
   });
 
