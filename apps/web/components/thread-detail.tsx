@@ -931,19 +931,22 @@ function ImageLightbox({
         resetView();
       }
       setDragX(0);
-    } else if (modeRef.current === "none" && !pinchRef.current && st) {
-      // Stationary tap: close if it landed outside the image, ignore otherwise.
-      const img = imgRef.current;
-      const r = img?.getBoundingClientRect();
-      const outside =
-        !r ||
-        e.clientX < r.left ||
-        e.clientX > r.right ||
-        e.clientY < r.top ||
-        e.clientY > r.bottom;
-      if (outside) onClose();
     }
     modeRef.current = "none";
+  }
+
+  // Close on a stationary tap outside the image. Handled on `click` (not
+  // pointerup) so unmounting can't leak the click to the page behind.
+  function onClick(e: React.MouseEvent) {
+    if (movedRef.current) return;
+    const r = imgRef.current?.getBoundingClientRect();
+    const outside =
+      !r ||
+      e.clientX < r.left ||
+      e.clientX > r.right ||
+      e.clientY < r.top ||
+      e.clientY > r.bottom;
+    if (outside) onClose();
   }
 
   function onTouchMove(e: React.TouchEvent) {
@@ -990,6 +993,7 @@ function ImageLightbox({
         onPointerCancel={onPointerUp}
         onTouchMove={onTouchMove}
         onTouchEnd={onTouchEnd}
+        onClick={onClick}
       >
         {images.map((att, i) => {
           const isCurrent = i === current;
