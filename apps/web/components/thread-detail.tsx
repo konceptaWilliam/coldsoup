@@ -761,18 +761,34 @@ function ImageLightbox({
   const pinchRef = useRef<{ dist: number; scale: number } | null>(null);
   const movedRef = useRef(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const imgRef = useRef<HTMLImageElement | null>(null);
   // Synchronous mirror of {scale,tx,ty} so back-to-back wheel/pan events
   // compute off the latest values instead of a stale render closure.
   const viewRef = useRef({ scale: 1, tx: 0, ty: 0 });
 
   const MAX = 6;
 
+  // Clamp pan so the scaled image always covers the viewport — no dragging it
+  // into empty space. Max offset on each axis is half the overflow; if the
+  // image is smaller than the viewport on that axis, it stays centered.
   const setView = useCallback(
     (v: { scale: number; tx: number; ty: number }) => {
-      viewRef.current = v;
-      setScale(v.scale);
-      setTx(v.tx);
-      setTy(v.ty);
+      const img = imgRef.current;
+      const vpW = window.innerWidth;
+      const vpH = window.innerHeight;
+      const bw = img?.offsetWidth ?? vpW;
+      const bh = img?.offsetHeight ?? vpH;
+      const maxX = Math.max(0, (bw * v.scale - vpW) / 2);
+      const maxY = Math.max(0, (bh * v.scale - vpH) / 2);
+      const nv = {
+        scale: v.scale,
+        tx: Math.min(maxX, Math.max(-maxX, v.tx)),
+        ty: Math.min(maxY, Math.max(-maxY, v.ty)),
+      };
+      viewRef.current = nv;
+      setScale(nv.scale);
+      setTx(nv.tx);
+      setTy(nv.ty);
     },
     [],
   );
@@ -974,6 +990,9 @@ function ImageLightbox({
             >
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
+                ref={(el) => {
+                  if (isCurrent) imgRef.current = el;
+                }}
                 src={att.url}
                 alt={att.name}
                 draggable={false}
