@@ -939,6 +939,10 @@ function ImageLightbox({
       className="fixed inset-0 z-[70] bg-black/90 overflow-hidden select-none"
       style={{ touchAction: "none", userSelect: "none", WebkitUserSelect: "none" }}
       onWheel={onWheel}
+      // Keep swipes inside the lightbox — don't let them bubble to the
+      // swipe-to-go-back gesture on <main> (would return to the thread list).
+      onTouchStart={(e) => e.stopPropagation()}
+      onTouchEnd={(e) => e.stopPropagation()}
     >
       {/* Sliding gallery track — all slides in a row, translated into view. */}
       <div
