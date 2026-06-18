@@ -740,72 +740,181 @@ function AttachmentActions({
 // pinch / wheel / double-tap to zoom, drag to pan when zoomed. No frame, no
 // action chrome — actions live in the hold menu (AttachmentActions).
 function ImageLightbox({
-  attachment,
+  images,
+  index,
   onClose,
 }: {
-  attachment: Attachment;
+  images: Attachment[];
+  index: number;
   onClose: () => void;
 }) {
   const [scale, setScale] = useState(1);
   const [tx, setTx] = useState(0);
   const [ty, setTy] = useState(0);
-  const dragRef = useRef<{ x: number; y: number; tx: number; ty: number } | null>(
+  const [current, setCurrent] = useState(index);
+  const [dragX, setDragX] = useState(0);
+  const [dragging, setDragging] = useState(false);
+  const startRef = useRef<{ x: number; y: number; tx: number; ty: number } | null>(
     null,
   );
+  const modeRef = useRef<"none" | "swipe" | "pan">("none");
   const pinchRef = useRef<{ dist: number; scale: number } | null>(null);
   const movedRef = useRef(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  // Synchronous mirror of {scale,tx,ty} so back-to-back wheel/pan events
+  // compute off the latest values instead of a stale render closure.
+  const viewRef = useRef({ scale: 1, tx: 0, ty: 0 });
 
   const MAX = 6;
+
+  const setView = useCallback(
+    (v: { scale: number; tx: number; ty: number }) => {
+      viewRef.current = v;
+      setScale(v.scale);
+      setTx(v.tx);
+      setTy(v.ty);
+    },
+    [],
+  );
+
+  const resetView = useCallback(() => {
+    setView({ scale: 1, tx: 0, ty: 0 });
+  }, [setView]);
+
+  const go = useCallback(
+    (dir: 1 | -1) => {
+      setCurrent((c) => {
+        const next = c + dir;
+        if (next < 0 || next >= images.length) return c;
+        resetView();
+        return next;
+      });
+      setDragX(0);
+      setDragging(false);
+    },
+    [images.length, resetView],
+  );
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
+      else if (e.key === "ArrowRight") go(1);
+      else if (e.key === "ArrowLeft") go(-1);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, go]);
 
-  const applyScale = useCallback((next: number) => {
+  // Scale about a screen point (cursor) so the pixel under the pointer stays
+  // put. Reads the latest transform from viewRef (not the render closure).
+  function zoomTo(next: number, clientX?: number, clientY?: number) {
+    const { scale: s, tx: ctx, ty: cty } = viewRef.current;
     const ns = Math.min(MAX, Math.max(1, next));
-    setScale(ns);
     if (ns <= 1) {
-      setTx(0);
-      setTy(0);
+      setView({ scale: 1, tx: 0, ty: 0 });
+      return;
     }
-  }, []);
-
-  function onWheel(e: React.WheelEvent) {
-    applyScale(scale - e.deltaY * 0.0015 * scale);
+    const el = containerRef.current;
+    if (!el || clientX == null || clientY == null) {
+      setView({ scale: ns, tx: ctx, ty: cty });
+      return;
+    }
+    const r = el.getBoundingClientRect();
+    const px = clientX - (r.left + r.width / 2);
+    const py = clientY - (r.top + r.height / 2);
+    const ratio = ns / s;
+    setView({
+      scale: ns,
+      tx: px - (px - ctx) * ratio,
+      ty: py - (py - cty) * ratio,
+    });
   }
 
-  function toggleZoom() {
-    if (scale > 1) {
-      setScale(1);
-      setTx(0);
-      setTy(0);
+  // Pinch zoom about screen center (touch).
+  const applyScale = useCallback(
+    (next: number) => {
+      const ns = Math.min(MAX, Math.max(1, next));
+      const v = viewRef.current;
+      setView(
+        ns <= 1 ? { scale: 1, tx: 0, ty: 0 } : { scale: ns, tx: v.tx, ty: v.ty },
+      );
+    },
+    [setView],
+  );
+
+  function onWheel(e: React.WheelEvent) {
+    e.preventDefault();
+    const factor = Math.exp(-e.deltaY * 0.0025);
+    zoomTo(viewRef.current.scale * factor, e.clientX, e.clientY);
+  }
+
+  function toggleZoom(e: React.MouseEvent) {
+    if (viewRef.current.scale > 1) {
+      setView({ scale: 1, tx: 0, ty: 0 });
     } else {
-      setScale(2.5);
+      zoomTo(2.5, e.clientX, e.clientY);
     }
   }
 
   function onPointerDown(e: React.PointerEvent) {
+    if (pinchRef.current) return;
     movedRef.current = false;
-    if (scale <= 1) return;
-    e.preventDefault();
-    dragRef.current = { x: e.clientX, y: e.clientY, tx, ty };
+    modeRef.current = "none";
+    startRef.current = {
+      x: e.clientX,
+      y: e.clientY,
+      tx: viewRef.current.tx,
+      ty: viewRef.current.ty,
+    };
     (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
   }
+
   function onPointerMove(e: React.PointerEvent) {
-    const d = dragRef.current;
-    if (!d || pinchRef.current) return;
-    const dx = e.clientX - d.x;
-    const dy = e.clientY - d.y;
+    const st = startRef.current;
+    if (!st || pinchRef.current) return;
+    const dx = e.clientX - st.x;
+    const dy = e.clientY - st.y;
+
+    if (modeRef.current === "none") {
+      if (scale > 1) modeRef.current = "pan";
+      else if (Math.abs(dx) > 6 && Math.abs(dx) > Math.abs(dy))
+        modeRef.current = "swipe";
+      else return;
+    }
+
     if (Math.abs(dx) > 3 || Math.abs(dy) > 3) movedRef.current = true;
-    setTx(d.tx + dx);
-    setTy(d.ty + dy);
+    setDragging(true);
+
+    if (modeRef.current === "pan") {
+      setView({ scale: viewRef.current.scale, tx: st.tx + dx, ty: st.ty + dy });
+    } else {
+      // Rubber-band against the ends of the gallery.
+      const atEnd =
+        (current === 0 && dx > 0) ||
+        (current === images.length - 1 && dx < 0);
+      setDragX(atEnd ? dx * 0.35 : dx);
+    }
   }
-  function onPointerUp() {
-    dragRef.current = null;
+
+  function onPointerUp(e: React.PointerEvent) {
+    const st = startRef.current;
+    startRef.current = null;
+    setDragging(false);
+
+    if (modeRef.current === "swipe" && st) {
+      const dx = e.clientX - st.x;
+      const W = window.innerWidth;
+      const threshold = Math.min(120, W * 0.18);
+      if (dx <= -threshold && current < images.length - 1) {
+        setCurrent(current + 1);
+        resetView();
+      } else if (dx >= threshold && current > 0) {
+        setCurrent(current - 1);
+        resetView();
+      }
+      setDragX(0);
+    }
+    modeRef.current = "none";
   }
 
   function onTouchMove(e: React.TouchEvent) {
@@ -826,13 +935,66 @@ function ImageLightbox({
 
   return (
     <div
-      className="fixed inset-0 z-[70] bg-black/90 flex items-center justify-center overflow-hidden select-none"
+      ref={containerRef}
+      className="fixed inset-0 z-[70] bg-black/90 overflow-hidden select-none"
       style={{ touchAction: "none", userSelect: "none", WebkitUserSelect: "none" }}
-      onClick={(e) => {
-        if (e.target === e.currentTarget && !movedRef.current) onClose();
-      }}
       onWheel={onWheel}
     >
+      {/* Sliding gallery track — all slides in a row, translated into view. */}
+      <div
+        className="absolute inset-0 flex"
+        style={{
+          transform: `translateX(calc(${-current} * 100vw + ${dragX}px))`,
+          transition: dragging
+            ? "none"
+            : "transform 0.32s cubic-bezier(0.22, 0.61, 0.36, 1)",
+          cursor: scale > 1 ? "grab" : "default",
+          touchAction: "none",
+        }}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
+        onTouchMove={onTouchMove}
+        onTouchEnd={onTouchEnd}
+      >
+        {images.map((att, i) => {
+          const isCurrent = i === current;
+          return (
+            <div
+              key={att.url}
+              className="flex-none w-screen h-full flex items-center justify-center"
+              onClick={(e) => {
+                if (e.target === e.currentTarget && !movedRef.current) onClose();
+              }}
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={att.url}
+                alt={att.name}
+                draggable={false}
+                onDragStart={(e) => e.preventDefault()}
+                onDoubleClick={isCurrent ? toggleZoom : undefined}
+                className="max-w-[96vw] max-h-[92vh] object-contain select-none"
+                style={{
+                  transform: isCurrent
+                    ? `translate(${tx}px, ${ty}px) scale(${scale})`
+                    : undefined,
+                  transition:
+                    dragging || pinchRef.current
+                      ? "none"
+                      : "transform 0.15s ease",
+                  cursor: isCurrent && scale > 1 ? "grab" : "zoom-in",
+                  touchAction: "none",
+                  WebkitTouchCallout: "none",
+                }}
+                loading={isCurrent ? "eager" : "lazy"}
+              />
+            </div>
+          );
+        })}
+      </div>
+
       <button
         onClick={onClose}
         aria-label="Close"
@@ -840,28 +1002,37 @@ function ImageLightbox({
       >
         ×
       </button>
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src={attachment.url}
-        alt={attachment.name}
-        draggable={false}
-        onDragStart={(e) => e.preventDefault()}
-        onDoubleClick={toggleZoom}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-        onPointerCancel={onPointerUp}
-        onTouchMove={onTouchMove}
-        onTouchEnd={onTouchEnd}
-        className="max-w-[100vw] max-h-[100vh] object-contain select-none"
-        style={{
-          transform: `translate(${tx}px, ${ty}px) scale(${scale})`,
-          transition: dragRef.current || pinchRef.current ? "none" : "transform 0.15s ease",
-          cursor: scale > 1 ? "grab" : "zoom-in",
-          touchAction: "none",
-          WebkitTouchCallout: "none",
-        }}
-      />
+      {images.length > 1 && (
+        <>
+          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 font-mono text-xs text-white/80 tabular-nums pointer-events-none select-none">
+            {current + 1} / {images.length}
+          </div>
+          {current > 0 && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                go(-1);
+              }}
+              aria-label="Previous image"
+              className="absolute left-2 top-1/2 -translate-y-1/2 z-10 w-11 h-11 flex items-center justify-center font-mono text-3xl leading-none text-white/70 hover:text-white"
+            >
+              ‹
+            </button>
+          )}
+          {current < images.length - 1 && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                go(1);
+              }}
+              aria-label="Next image"
+              className="absolute right-2 top-1/2 -translate-y-1/2 z-10 w-11 h-11 flex items-center justify-center font-mono text-3xl leading-none text-white/70 hover:text-white"
+            >
+              ›
+            </button>
+          )}
+        </>
+      )}
     </div>
   );
 }
@@ -908,6 +1079,59 @@ function ThreadImage({
         {att.name}
       </span>
     </button>
+  );
+}
+
+// A single staged (not-yet-sent) file in the composer. Images render as a
+// thumbnail tile with a remove button; other files fall back to a name chip.
+function PendingPreview({
+  file,
+  onRemove,
+}: {
+  file: File;
+  onRemove: () => void;
+}) {
+  const isImage = file.type.startsWith("image/");
+  const [url, setUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isImage) return;
+    const u = URL.createObjectURL(file);
+    setUrl(u);
+    return () => URL.revokeObjectURL(u);
+  }, [file, isImage]);
+
+  if (isImage && url) {
+    return (
+      <div className="relative h-16 w-16 overflow-hidden border border-border bg-surface-2">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={url}
+          alt={file.name}
+          className="h-full w-full object-cover"
+        />
+        <button
+          onClick={onRemove}
+          aria-label={`Remove ${file.name}`}
+          className="absolute top-0.5 right-0.5 flex h-5 w-5 items-center justify-center bg-ink/70 text-surface text-sm leading-none hover:bg-ink transition-colors"
+        >
+          ×
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-16 items-center gap-1.5 border border-border bg-surface-2 px-2 text-xs text-ink">
+      <span className="max-w-[120px] truncate font-mono">{file.name}</span>
+      <button
+        onClick={onRemove}
+        aria-label={`Remove ${file.name}`}
+        className="ml-0.5 text-muted hover:text-ink transition-colors"
+      >
+        ×
+      </button>
+    </div>
   );
 }
 
@@ -1119,6 +1343,47 @@ function LinkPreview({ url }: { url: string }) {
   );
 }
 
+// One cell in the multi-image mosaic. Tap → lightbox; hold/right-click → actions.
+function GridTile({
+  att,
+  onOpen,
+  onHold,
+  overlay,
+  style,
+}: {
+  att: Attachment;
+  onOpen: (att: Attachment) => void;
+  onHold: (att: Attachment) => void;
+  overlay?: number;
+  style?: React.CSSProperties;
+}) {
+  const press = useImagePress(() => onOpen(att), () => onHold(att));
+  return (
+    <button
+      {...press}
+      title={att.name}
+      className="relative block w-full h-full overflow-hidden bg-surface-2 focus:outline-none"
+      style={style}
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={att.url}
+        alt={att.name}
+        draggable={false}
+        loading="lazy"
+        className="w-full h-full object-cover block"
+      />
+      {overlay != null && overlay > 0 && (
+        <span className="absolute inset-0 flex items-center justify-center bg-ink/55 text-surface font-mono text-lg font-semibold pointer-events-none select-none">
+          +{overlay}
+        </span>
+      )}
+    </button>
+  );
+}
+
+// Messenger-style image mosaic for messages with 2+ images. Tidy grid, no
+// hover-fan / drag — tap any tile to open the lightbox.
 function ImageGallery({
   attachments,
   onOpen,
@@ -1128,200 +1393,69 @@ function ImageGallery({
   onOpen: (att: Attachment) => void;
   onHold: (att: Attachment) => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
-  const [offset, setOffset] = useState({ x: 0, y: 0 });
-  const [isDragging, setIsDragging] = useState(false);
-  const dragStart = useRef<{
-    mx: number;
-    my: number;
-    ox: number;
-    minX: number;
-    maxX: number;
-  } | null>(null);
-  const hasDraggedRef = useRef(false);
-  const justExpandedRef = useRef(false);
-  const containerRef = useRef<HTMLDivElement>(null);
   const n = attachments.length;
+  const shown = attachments.slice(0, 4);
+  const extra = n - shown.length;
+  const MAX_W = 272;
 
-  useEffect(() => {
-    if (!expanded) setOffset({ x: 0, y: 0 });
-  }, [expanded]);
-
-  useEffect(() => {
-    if (isDragging) {
-      document.body.style.cursor = "grabbing";
-      document.body.style.userSelect = "none";
-    } else {
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-    }
-    return () => {
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-    };
-  }, [isDragging]);
-
-  useEffect(() => {
-    if (!isDragging) return;
-
-    function onMove(e: MouseEvent) {
-      if (!dragStart.current) return;
-      const dx = e.clientX - dragStart.current.mx;
-      if (Math.abs(dx) > 3) hasDraggedRef.current = true;
-      const newX = Math.min(
-        dragStart.current.maxX,
-        Math.max(dragStart.current.minX, dragStart.current.ox + dx),
-      );
-      setOffset({ x: newX, y: 0 });
-    }
-
-    function onUp(e: MouseEvent) {
-      setIsDragging(false);
-      dragStart.current = null;
-      if (containerRef.current) {
-        const r = containerRef.current.getBoundingClientRect();
-        const inside =
-          e.clientX >= r.left &&
-          e.clientX <= r.right &&
-          e.clientY >= r.top &&
-          e.clientY <= r.bottom;
-        if (!inside) setExpanded(false);
-      }
-    }
-
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-    return () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-    };
-  }, [isDragging]);
-
-  function startDrag(clientX: number, clientY: number) {
-    hasDraggedRef.current = false;
-
-    let minX = 0;
-    const maxX = 0;
-    const parent = containerRef.current?.parentElement;
-    if (parent) {
-      const expandedWidth = 130 * n + 10 * (n - 1);
-      const parentWidth = parent.getBoundingClientRect().width;
-      minX = Math.min(0, parentWidth - expandedWidth);
-    }
-
-    dragStart.current = { mx: clientX, my: clientY, ox: offset.x, minX, maxX };
-    setIsDragging(true);
+  if (n === 2) {
+    return (
+      <div
+        className="grid gap-[2px] overflow-hidden"
+        style={{ width: MAX_W, gridTemplateColumns: "1fr 1fr" }}
+      >
+        {shown.map((att, i) => (
+          <GridTile
+            key={i}
+            att={att}
+            onOpen={onOpen}
+            onHold={onHold}
+            style={{ aspectRatio: "1 / 1" }}
+          />
+        ))}
+      </div>
+    );
   }
 
+  if (n === 3) {
+    return (
+      <div
+        className="grid gap-[2px] overflow-hidden"
+        style={{
+          width: MAX_W,
+          height: 180,
+          gridTemplateColumns: "1fr 1fr",
+          gridTemplateRows: "1fr 1fr",
+        }}
+      >
+        <GridTile
+          att={shown[0]}
+          onOpen={onOpen}
+          onHold={onHold}
+          style={{ gridRow: "1 / span 2" }}
+        />
+        <GridTile att={shown[1]} onOpen={onOpen} onHold={onHold} />
+        <GridTile att={shown[2]} onOpen={onOpen} onHold={onHold} />
+      </div>
+    );
+  }
+
+  // n >= 4: 2×2 grid, last tile shows "+N" overlay when more images exist.
   return (
     <div
-      ref={containerRef}
-      className="relative flex items-center"
-      style={{
-        transform: `translate(${offset.x}px, ${offset.y}px)`,
-        cursor: expanded ? (isDragging ? "grabbing" : "grab") : "default",
-        touchAction: expanded ? "none" : "auto",
-        zIndex: isDragging ? 10 : undefined,
-      }}
-      onMouseEnter={() => setExpanded(true)}
-      onMouseLeave={() => {
-        if (!isDragging) setExpanded(false);
-      }}
-      onMouseDown={(e) => {
-        e.preventDefault();
-        startDrag(e.clientX, e.clientY);
-      }}
-      onTouchStart={(e) => {
-        if (!expanded) {
-          setExpanded(true);
-          justExpandedRef.current = true;
-        }
-        const t = e.touches[0];
-        startDrag(t.clientX, t.clientY);
-      }}
-      onTouchMove={(e) => {
-        if (!dragStart.current) return;
-        const t = e.touches[0];
-        const dx = t.clientX - dragStart.current.mx;
-        if (Math.abs(dx) > 3) hasDraggedRef.current = true;
-        const newX = Math.min(
-          dragStart.current.maxX,
-          Math.max(dragStart.current.minX, dragStart.current.ox + dx),
-        );
-        setOffset({ x: newX, y: 0 });
-      }}
-      onTouchEnd={() => {
-        setIsDragging(false);
-        dragStart.current = null;
-      }}
+      className="grid gap-[2px] overflow-hidden"
+      style={{ width: MAX_W, gridTemplateColumns: "1fr 1fr" }}
     >
-      {attachments.map((att, i) => {
-        const dir = i % 2 === 0 ? 1 : -1;
-        const stackedRot = dir * (1.5 + i * 1.5);
-        const expandedRot = dir * (0.5 + (i % 3) * 0.4);
-
-        return (
-          <button
-            key={i}
-            onClick={() => {
-              if (hasDraggedRef.current) return;
-              if (justExpandedRef.current) {
-                justExpandedRef.current = false;
-                return;
-              }
-              if (expanded) onOpen(att);
-              else setExpanded(true);
-            }}
-            onContextMenu={(e) => {
-              e.preventDefault();
-              onHold(att);
-            }}
-            title={att.name}
-            className="block text-left flex-shrink-0 focus:outline-none"
-            style={{
-              background: "var(--background)",
-              padding: "6px 6px 22px 6px",
-              boxShadow: isDragging
-                ? "0 10px 28px rgba(0,0,0,0.28), 0 2px 6px rgba(0,0,0,0.12)"
-                : "0 4px 14px rgba(0,0,0,0.20), 0 1px 3px rgba(0,0,0,0.08)",
-              rotate: `${expanded ? expandedRot : stackedRot}deg`,
-              width: "130px",
-              marginLeft: i === 0 ? 0 : expanded ? "10px" : "-92px",
-              zIndex: n - i,
-              transition: isDragging
-                ? "box-shadow 200ms ease"
-                : "rotate 320ms cubic-bezier(0.34,1.56,0.64,1), margin-left 280ms cubic-bezier(0.34,1.56,0.64,1), box-shadow 200ms ease",
-              position: "relative",
-            }}
-          >
-            <img
-              src={att.url}
-              alt={att.name}
-              draggable={false}
-              className="w-full object-cover block"
-              style={{ aspectRatio: "1/1" }}
-              loading="lazy"
-            />
-            <span
-              className="font-mono text-[9px] text-center truncate block mt-1.5"
-              style={{
-                color: "#888",
-                opacity: expanded ? 1 : 0,
-                transition: "opacity 200ms ease",
-              }}
-            >
-              {att.name}
-            </span>
-          </button>
-        );
-      })}
-
-      <div
-        className="absolute -bottom-0.5 right-0 bg-ink text-surface font-mono text-[9px] leading-none px-1.5 py-0.5 pointer-events-none select-none"
-        style={{ opacity: expanded ? 0 : 1, transition: "opacity 200ms ease" }}
-      >
-        {n}×
-      </div>
+      {shown.map((att, i) => (
+        <GridTile
+          key={i}
+          att={att}
+          onOpen={onOpen}
+          onHold={onHold}
+          overlay={i === 3 ? extra : undefined}
+          style={{ aspectRatio: "1 / 1" }}
+        />
+      ))}
     </div>
   );
 }
@@ -1718,7 +1852,10 @@ export function ThreadDetail({
   const recordStreamRef = useRef<MediaStream | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
-  const [activeLightbox, setActiveLightbox] = useState<Attachment | null>(null);
+  const [activeLightbox, setActiveLightbox] = useState<{
+    images: Attachment[];
+    index: number;
+  } | null>(null);
   const [imageActions, setImageActions] = useState<Attachment | null>(null);
   const [activeTooltip, setActiveTooltip] = useState<string | null>(null);
   const tooltipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -3886,7 +4023,10 @@ export function ThreadDetail({
                                     <ThreadImage
                                       att={imgAtts[0]}
                                       onOpen={() =>
-                                        setActiveLightbox(imgAtts[0])
+                                        setActiveLightbox({
+                                          images: imgAtts,
+                                          index: 0,
+                                        })
                                       }
                                       onHold={() =>
                                         setImageActions(imgAtts[0])
@@ -3896,7 +4036,15 @@ export function ThreadDetail({
                                   {imgAtts.length >= 2 && (
                                     <ImageGallery
                                       attachments={imgAtts}
-                                      onOpen={setActiveLightbox}
+                                      onOpen={(att) =>
+                                        setActiveLightbox({
+                                          images: imgAtts,
+                                          index: Math.max(
+                                            0,
+                                            imgAtts.indexOf(att),
+                                          ),
+                                        })
+                                      }
                                       onHold={setImageActions}
                                     />
                                   )}
@@ -4155,7 +4303,8 @@ export function ThreadDetail({
       {/* Tap → zoomable fullscreen image */}
       {activeLightbox && (
         <ImageLightbox
-          attachment={activeLightbox}
+          images={activeLightbox.images}
+          index={activeLightbox.index}
           onClose={() => setActiveLightbox(null)}
         />
       )}
@@ -4434,20 +4583,11 @@ export function ThreadDetail({
         {!isDone && pendingFiles.length > 0 && (
           <div className="flex flex-wrap gap-2 mb-2">
             {pendingFiles.map((file, i) => (
-              <div
+              <PendingPreview
                 key={i}
-                className="flex items-center gap-1.5 border border-border bg-surface-2 px-2 py-1 text-xs text-ink"
-              >
-                <span className="max-w-[120px] truncate font-mono">
-                  {file.name}
-                </span>
-                <button
-                  onClick={() => removePendingFile(i)}
-                  className="text-muted hover:text-ink transition-colors ml-0.5"
-                >
-                  ×
-                </button>
-              </div>
+                file={file}
+                onRemove={() => removePendingFile(i)}
+              />
             ))}
           </div>
         )}
