@@ -882,7 +882,6 @@ function ImageLightbox({
       tx: viewRef.current.tx,
       ty: viewRef.current.ty,
     };
-    (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
   }
 
   function onPointerMove(e: React.PointerEvent) {
@@ -896,6 +895,9 @@ function ImageLightbox({
       else if (Math.abs(dx) > 6 && Math.abs(dx) > Math.abs(dy))
         modeRef.current = "swipe";
       else return;
+      // Capture only once an actual drag begins, so a plain tap still
+      // delivers its click (and never hijacks the nav/close buttons).
+      (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
     }
 
     if (Math.abs(dx) > 3 || Math.abs(dy) > 3) movedRef.current = true;
@@ -929,6 +931,17 @@ function ImageLightbox({
         resetView();
       }
       setDragX(0);
+    } else if (modeRef.current === "none" && !pinchRef.current && st) {
+      // Stationary tap: close if it landed outside the image, ignore otherwise.
+      const img = imgRef.current;
+      const r = img?.getBoundingClientRect();
+      const outside =
+        !r ||
+        e.clientX < r.left ||
+        e.clientX > r.right ||
+        e.clientY < r.top ||
+        e.clientY > r.bottom;
+      if (outside) onClose();
     }
     modeRef.current = "none";
   }
@@ -984,9 +997,6 @@ function ImageLightbox({
             <div
               key={att.url}
               className="flex-none w-screen h-full flex items-center justify-center"
-              onClick={(e) => {
-                if (e.target === e.currentTarget && !movedRef.current) onClose();
-              }}
             >
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
