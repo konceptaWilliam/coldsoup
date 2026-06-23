@@ -41,6 +41,13 @@ type ReplyTo = {
   author_name: string;
 };
 
+// Message context needed to start a reply from an image (lightbox / hold menu).
+type ReplyTarget = {
+  id: string;
+  body: string;
+  authorName: string;
+};
+
 const REACTION_DEFAULTS: Reaction[] = REACTION_TYPES.map((type) => ({
   type,
   count: 0,
@@ -565,23 +572,40 @@ function renderBody(
   return parts.length ? <>{parts}</> : body;
 }
 
-// Long-press / hold actions for an attachment: download + resend to another
-// thread. Opened by holding (or right-clicking) an image — the plain tap opens
-// the zoomable lightbox instead.
+// Download an attachment (or share it via the Web Share API on mobile when
+// available). Falls back to opening the URL in a new tab on failure.
+async function downloadAttachment(attachment: Attachment) {
+  try {
+    const res = await fetch(attachment.url);
+    const blob = await res.blob();
+    const file = new File([blob], attachment.name, { type: blob.type });
+    if (navigator.canShare?.({ files: [file] })) {
+      await navigator.share({ files: [file] });
+      return;
+    }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = attachment.name;
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch {
+    window.open(attachment.url, "_blank");
+  }
+}
+
+// Long-press / hold actions for an attachment: download + reply. Opened by
+// holding (or right-clicking) an image — the plain tap opens the zoomable
+// lightbox instead.
 function AttachmentActions({
   attachment,
-  groupId,
-  currentThreadId,
+  onReply,
   onClose,
 }: {
   attachment: Attachment;
-  groupId: string;
-  currentThreadId: string;
+  onReply: () => void;
   onClose: () => void;
 }) {
-  const [view, setView] = useState<"actions" | "resend">("actions");
-  const [sentToThread, setSentToThread] = useState<string | null>(null);
-
   // Swipe-down-to-dismiss (mobile), matching the S-meter sheet.
   const sheetRef = useRef<HTMLDivElement>(null);
   const dragStart = useRef<{ y: number; scroll: number } | null>(null);
@@ -610,37 +634,10 @@ function AttachmentActions({
     dragStart.current = null;
   }
 
-  const { data: threads } = trpc.threads.list.useQuery({ groupId });
-  const send = trpc.messages.send.useMutation({
-    onSuccess: (_, vars) => {
-      setSentToThread(vars.threadId);
-      setTimeout(onClose, 1200);
-    },
-  });
-
   async function handleDownload() {
-    try {
-      const res = await fetch(attachment.url);
-      const blob = await res.blob();
-      const file = new File([blob], attachment.name, { type: blob.type });
-      if (navigator.canShare?.({ files: [file] })) {
-        await navigator.share({ files: [file] });
-        onClose();
-        return;
-      }
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = attachment.name;
-      a.click();
-      URL.revokeObjectURL(url);
-    } catch {
-      window.open(attachment.url, "_blank");
-    }
+    await downloadAttachment(attachment);
     onClose();
   }
-
-  const otherThreads = (threads ?? []).filter((t) => t.id !== currentThreadId);
 
   return (
     <div
@@ -676,60 +673,23 @@ function AttachmentActions({
         </div>
 
         <div ref={sheetRef} className="flex-1 overflow-y-auto min-h-0 p-2">
-          {view === "actions" ? (
-            <div className="space-y-1">
-              <button
-                onClick={handleDownload}
-                className="w-full text-left px-3 py-3 font-mono text-sm text-ink hover:bg-border/40 transition-colors"
-              >
-                Download
-              </button>
-              <button
-                onClick={() => setView("resend")}
-                className="w-full text-left px-3 py-3 font-mono text-sm text-ink hover:bg-border/40 transition-colors"
-              >
-                Resend to another thread
-              </button>
-            </div>
-          ) : (
-            <div className="p-2">
-              <button
-                onClick={() => setView("actions")}
-                className="font-mono text-xs text-muted hover:text-ink transition-colors mb-3"
-              >
-                ← Back
-              </button>
-              <p className="font-mono text-[10px] text-muted uppercase tracking-wider mb-2">
-                Send to thread
-              </p>
-              {sentToThread ? (
-                <p className="font-mono text-sm text-ink px-1">Sent!</p>
-              ) : otherThreads.length === 0 ? (
-                <p className="text-xs text-muted px-1">
-                  No other threads in this group.
-                </p>
-              ) : (
-                <div className="space-y-1">
-                  {otherThreads.map((thread) => (
-                    <button
-                      key={thread.id}
-                      onClick={() =>
-                        send.mutate({
-                          threadId: thread.id,
-                          body: "",
-                          attachments: [attachment],
-                        })
-                      }
-                      disabled={send.isPending}
-                      className="w-full text-left px-3 py-2.5 font-mono text-sm text-ink hover:bg-border/40 transition-colors border border-transparent hover:border-border disabled:opacity-40"
-                    >
-                      # {(thread as unknown as { title: string }).title}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
+          <div className="space-y-1">
+            <button
+              onClick={handleDownload}
+              className="w-full text-left px-3 py-3 font-mono text-sm text-ink hover:bg-border/40 transition-colors"
+            >
+              Download
+            </button>
+            <button
+              onClick={() => {
+                onReply();
+                onClose();
+              }}
+              className="w-full text-left px-3 py-3 font-mono text-sm text-ink hover:bg-border/40 transition-colors"
+            >
+              Reply
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -742,10 +702,14 @@ function AttachmentActions({
 function ImageLightbox({
   images,
   index,
+  onDownload,
+  onReply,
   onClose,
 }: {
   images: Attachment[];
   index: number;
+  onDownload: (att: Attachment) => void;
+  onReply: () => void;
   onClose: () => void;
 }) {
   const [scale, setScale] = useState(1);
@@ -1032,13 +996,38 @@ function ImageLightbox({
         })}
       </div>
 
-      <button
-        onClick={onClose}
-        aria-label="Close"
-        className="absolute top-3 right-3 z-10 font-mono text-2xl leading-none text-white/80 hover:text-white w-11 h-11 flex items-center justify-center"
-      >
-        ×
-      </button>
+      {/* Per-image actions — reachable even for images hidden behind the +N
+          tile in the grid, where the hold menu can't be opened. */}
+      <div className="absolute top-3 right-3 z-10 flex items-center gap-1">
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onDownload(images[current]);
+          }}
+          aria-label="Download image"
+          className="font-mono text-xs uppercase tracking-wider text-white/80 hover:text-white px-3 h-11 flex items-center justify-center"
+        >
+          Download
+        </button>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onReply();
+            onClose();
+          }}
+          aria-label="Reply to image"
+          className="font-mono text-xs uppercase tracking-wider text-white/80 hover:text-white px-3 h-11 flex items-center justify-center"
+        >
+          Reply
+        </button>
+        <button
+          onClick={onClose}
+          aria-label="Close"
+          className="font-mono text-2xl leading-none text-white/80 hover:text-white w-11 h-11 flex items-center justify-center"
+        >
+          ×
+        </button>
+      </div>
       {images.length > 1 && (
         <>
           <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 font-mono text-xs text-white/80 tabular-nums pointer-events-none select-none">
@@ -1892,8 +1881,12 @@ export function ThreadDetail({
   const [activeLightbox, setActiveLightbox] = useState<{
     images: Attachment[];
     index: number;
+    reply: ReplyTarget;
   } | null>(null);
-  const [imageActions, setImageActions] = useState<Attachment | null>(null);
+  const [imageActions, setImageActions] = useState<{
+    attachment: Attachment;
+    reply: ReplyTarget;
+  } | null>(null);
   const [activeTooltip, setActiveTooltip] = useState<string | null>(null);
   const tooltipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -4063,10 +4056,22 @@ export function ThreadDetail({
                                         setActiveLightbox({
                                           images: imgAtts,
                                           index: 0,
+                                          reply: {
+                                            id: msg.id,
+                                            body: msg.body,
+                                            authorName: name,
+                                          },
                                         })
                                       }
                                       onHold={() =>
-                                        setImageActions(imgAtts[0])
+                                        setImageActions({
+                                          attachment: imgAtts[0],
+                                          reply: {
+                                            id: msg.id,
+                                            body: msg.body,
+                                            authorName: name,
+                                          },
+                                        })
                                       }
                                     />
                                   )}
@@ -4080,9 +4085,23 @@ export function ThreadDetail({
                                             0,
                                             imgAtts.indexOf(att),
                                           ),
+                                          reply: {
+                                            id: msg.id,
+                                            body: msg.body,
+                                            authorName: name,
+                                          },
                                         })
                                       }
-                                      onHold={setImageActions}
+                                      onHold={(att) =>
+                                        setImageActions({
+                                          attachment: att,
+                                          reply: {
+                                            id: msg.id,
+                                            body: msg.body,
+                                            authorName: name,
+                                          },
+                                        })
+                                      }
                                     />
                                   )}
                                   {videoAtts.length > 0 && (
@@ -4342,16 +4361,23 @@ export function ThreadDetail({
         <ImageLightbox
           images={activeLightbox.images}
           index={activeLightbox.index}
+          onDownload={(att) => void downloadAttachment(att)}
+          onReply={() => {
+            setReplyingTo(activeLightbox.reply);
+            textareaRef.current?.focus();
+          }}
           onClose={() => setActiveLightbox(null)}
         />
       )}
 
-      {/* Hold → download / resend actions */}
+      {/* Hold → download / reply actions */}
       {imageActions && (
         <AttachmentActions
-          attachment={imageActions}
-          groupId={groupId}
-          currentThreadId={threadId}
+          attachment={imageActions.attachment}
+          onReply={() => {
+            setReplyingTo(imageActions.reply);
+            textareaRef.current?.focus();
+          }}
           onClose={() => setImageActions(null)}
         />
       )}
