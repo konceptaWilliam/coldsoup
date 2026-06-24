@@ -2898,6 +2898,31 @@ export function ThreadDetail({
 
   // Scroll a message into view, paging in older history when it isn't loaded
   // yet — reply quotes and search deep-links often point at old messages.
+  // Open the replied-to image in the lightbox. Prefer the target message's full
+  // image set (so swipe/gallery works) when it's loaded; otherwise fall back to
+  // a single synthetic slide built from the stored url.
+  function openReplyImage(replyTo: ReplyTo) {
+    if (!replyTo.image_url) return;
+    const target = messages.find((m) => m.id === replyTo.id);
+    const imgs =
+      target?.attachments?.filter((a) => a.type === "image") ?? [];
+    const reply: ReplyTarget = {
+      id: replyTo.id,
+      body: replyTo.body,
+      authorName: replyTo.author_name,
+    };
+    if (imgs.length > 0) {
+      const idx = imgs.findIndex((a) => a.url === replyTo.image_url);
+      setActiveLightbox({ images: imgs, index: Math.max(0, idx), reply });
+    } else {
+      setActiveLightbox({
+        images: [{ url: replyTo.image_url, type: "image", name: "" }],
+        index: 0,
+        reply,
+      });
+    }
+  }
+
   async function jumpToMessage(messageId: string) {
     const flash = () => {
       setJumpFlashId(messageId);
@@ -3851,27 +3876,35 @@ export function ThreadDetail({
                           <div className="relative">
                             {/* Reply quote */}
                             {msg.reply_to && !msg.is_deleted && (
-                              <button
-                                className="flex items-center gap-1.5 mb-1 border-l-2 border-border pl-2 text-left w-full hover:border-ink/40 transition-colors group/reply"
-                                onClick={() => void jumpToMessage(msg.reply_to!.id)}
-                              >
+                              <div className="flex items-center gap-1.5 mb-1 border-l-2 border-border pl-2 hover:border-ink/40 transition-colors group/reply">
                                 {msg.reply_to.image_url && (
-                                  // eslint-disable-next-line @next/next/no-img-element
-                                  <img
-                                    src={msg.reply_to.image_url}
-                                    alt=""
-                                    className="w-8 h-8 object-cover border border-border flex-shrink-0"
-                                  />
+                                  <button
+                                    onClick={() =>
+                                      openReplyImage(msg.reply_to!)
+                                    }
+                                    aria-label="Open replied-to image"
+                                    className="flex-shrink-0"
+                                  >
+                                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                                    <img
+                                      src={msg.reply_to.image_url}
+                                      alt=""
+                                      className="w-8 h-8 object-cover border border-border"
+                                    />
+                                  </button>
                                 )}
-                                <div className="min-w-0">
-                                  <span className="font-mono text-[12px] text-muted font-semibold">
+                                <button
+                                  className="min-w-0 text-left flex-1"
+                                  onClick={() => void jumpToMessage(msg.reply_to!.id)}
+                                >
+                                  <span className="font-mono text-[12px] text-muted font-semibold block">
                                     {msg.reply_to.author_name}
                                   </span>
                                   <p className="text-[13px] text-muted truncate leading-snug">
                                     {msg.reply_to.body || (msg.reply_to.image_url ? "(image)" : "")}
                                   </p>
-                                </div>
-                              </button>
+                                </button>
+                              </div>
                             )}
 
                             {/* Deleted message tombstone */}
