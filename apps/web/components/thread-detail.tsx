@@ -39,9 +39,14 @@ type ReplyTo = {
   id: string;
   body: string;
   author_name: string;
+  // Specific image of the replied-to message, when the reply was started from
+  // an image. Null for text replies / non-image messages.
+  image_url: string | null;
 };
 
 // Message context needed to start a reply from an image (lightbox / hold menu).
+// The specific image url is supplied at reply time (the lightbox can swipe to a
+// different image than the one originally opened).
 type ReplyTarget = {
   id: string;
   body: string;
@@ -108,6 +113,7 @@ type FailedEntry = {
   body: string;
   attachments: Attachment[];
   replyToId?: string;
+  replyToAttachmentUrl?: string | null;
   replyTo: ReplyTo | null;
   created_at: string;
 };
@@ -709,7 +715,7 @@ function ImageLightbox({
   images: Attachment[];
   index: number;
   onDownload: (att: Attachment) => void;
-  onReply: () => void;
+  onReply: (att: Attachment) => void;
   onClose: () => void;
 }) {
   const [scale, setScale] = useState(1);
@@ -1012,7 +1018,7 @@ function ImageLightbox({
         <button
           onClick={(e) => {
             e.stopPropagation();
-            onReply();
+            onReply(images[current]);
             onClose();
           }}
           aria-label="Reply to image"
@@ -1968,6 +1974,7 @@ export function ThreadDetail({
     id: string;
     body: string;
     authorName: string;
+    imageUrl: string | null;
   } | null>(null);
 
   // Edit state
@@ -2542,6 +2549,7 @@ export function ThreadDetail({
             client_id: string | null;
             attachments: Attachment[];
             reply_to_id: string | null;
+            reply_to_attachment_url: string | null;
             poll_id: string | null;
             smeter_id: string | null;
             system_event: SystemEvent | null;
@@ -2605,6 +2613,8 @@ export function ThreadDetail({
                 author_name:
                   (replyMsg.profiles as unknown as { display_name: string } | null)
                     ?.display_name ?? "Unknown",
+                // image_url is on the new (reply) row, not the target.
+                image_url: newMsg.reply_to_attachment_url ?? null,
               };
             }
           }
@@ -2767,13 +2777,14 @@ export function ThreadDetail({
       const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
       const clientId = vars.clientId ?? tempId;
       const messageBody = vars.body ?? "";
-      const replyTo =
+      const replyTo: ReplyTo | null =
         vars.replyToId
           ? replyingTo?.id === vars.replyToId
             ? {
                 id: replyingTo.id,
                 body: replyingTo.body,
                 author_name: replyingTo.authorName,
+                image_url: vars.replyToAttachmentUrl ?? null,
               }
             : (() => {
                 const found = messages.find((m) => m.id === vars.replyToId);
@@ -2783,6 +2794,7 @@ export function ThreadDetail({
                       body: found.body.slice(0, 120),
                       author_name:
                         found.profiles?.display_name ?? "Unknown",
+                      image_url: vars.replyToAttachmentUrl ?? null,
                     }
                   : null;
               })()
@@ -2820,6 +2832,7 @@ export function ThreadDetail({
         body: messageBody,
         attachments: vars.attachments ?? [],
         replyToId: vars.replyToId,
+        replyToAttachmentUrl: vars.replyToAttachmentUrl ?? null,
         replyTo,
         created_at: tempMessage.created_at,
       };
@@ -3169,6 +3182,7 @@ export function ThreadDetail({
         body: body.trim(),
         attachments,
         replyToId: replyingTo?.id,
+        replyToAttachmentUrl: replyingTo?.imageUrl ?? undefined,
         clientId: crypto.randomUUID(),
       });
       if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
@@ -3349,7 +3363,7 @@ export function ThreadDetail({
     el.style.transform = "";
     if (s.locked === 1 && off >= SWIPE_TRIGGER) {
       haptic("light");
-      setReplyingTo({ id: message.id, body: message.body, authorName: name });
+      setReplyingTo({ id: message.id, body: message.body, authorName: name, imageUrl: null });
       textareaRef.current?.focus();
     }
   }
@@ -3433,6 +3447,7 @@ export function ThreadDetail({
       body: entry.body,
       attachments: entry.attachments,
       replyToId: entry.replyToId,
+      replyToAttachmentUrl: entry.replyToAttachmentUrl ?? undefined,
       // Reuse the original client_id so a retry that the server actually
       // persisted on the first (timed-out) attempt dedupes instead of doubling.
       clientId: entry.clientId,
@@ -3837,15 +3852,23 @@ export function ThreadDetail({
                             {/* Reply quote */}
                             {msg.reply_to && !msg.is_deleted && (
                               <button
-                                className="flex items-start gap-1.5 mb-1 border-l-2 border-border pl-2 text-left w-full hover:border-ink/40 transition-colors group/reply"
+                                className="flex items-center gap-1.5 mb-1 border-l-2 border-border pl-2 text-left w-full hover:border-ink/40 transition-colors group/reply"
                                 onClick={() => void jumpToMessage(msg.reply_to!.id)}
                               >
+                                {msg.reply_to.image_url && (
+                                  // eslint-disable-next-line @next/next/no-img-element
+                                  <img
+                                    src={msg.reply_to.image_url}
+                                    alt=""
+                                    className="w-8 h-8 object-cover border border-border flex-shrink-0"
+                                  />
+                                )}
                                 <div className="min-w-0">
                                   <span className="font-mono text-[12px] text-muted font-semibold">
                                     {msg.reply_to.author_name}
                                   </span>
                                   <p className="text-[13px] text-muted truncate leading-snug">
-                                    {msg.reply_to.body}
+                                    {msg.reply_to.body || (msg.reply_to.image_url ? "(image)" : "")}
                                   </p>
                                 </div>
                               </button>
@@ -3976,6 +3999,7 @@ export function ThreadDetail({
                                       id: msg.id,
                                       body: msg.body,
                                       authorName: name,
+                                      imageUrl: null,
                                     });
                                     textareaRef.current?.focus();
                                   }}
@@ -4362,8 +4386,8 @@ export function ThreadDetail({
           images={activeLightbox.images}
           index={activeLightbox.index}
           onDownload={(att) => void downloadAttachment(att)}
-          onReply={() => {
-            setReplyingTo(activeLightbox.reply);
+          onReply={(att) => {
+            setReplyingTo({ ...activeLightbox.reply, imageUrl: att.url });
             textareaRef.current?.focus();
           }}
           onClose={() => setActiveLightbox(null)}
@@ -4375,7 +4399,10 @@ export function ThreadDetail({
         <AttachmentActions
           attachment={imageActions.attachment}
           onReply={() => {
-            setReplyingTo(imageActions.reply);
+            setReplyingTo({
+              ...imageActions.reply,
+              imageUrl: imageActions.attachment.url,
+            });
             textareaRef.current?.focus();
           }}
           onClose={() => setImageActions(null)}
@@ -4487,6 +4514,7 @@ export function ThreadDetail({
                       id: activeMessageMenu.id,
                       body: activeMessageMenu.body,
                       authorName: activeMessageMenu.profiles?.display_name ?? "Unknown",
+                      imageUrl: null,
                     });
                     setActiveMessageMenuId(null);
                     textareaRef.current?.focus();
@@ -4624,13 +4652,21 @@ export function ThreadDetail({
 
         {/* Reply banner */}
         {!isDone && replyingTo && (
-          <div className="flex items-start gap-2 mb-2 pl-3 pr-2 py-2 border-l-2 border-pastel-deep bg-surface-2">
+          <div className="flex items-center gap-2 mb-2 pl-3 pr-2 py-2 border-l-2 border-pastel-deep bg-surface-2">
+            {replyingTo.imageUrl && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={replyingTo.imageUrl}
+                alt=""
+                className="w-9 h-9 object-cover border border-border flex-shrink-0"
+              />
+            )}
             <div className="flex-1 min-w-0">
               <span className="font-mono text-[10px] text-muted uppercase tracking-wider">
                 replying to {replyingTo.authorName}
               </span>
               <p className="text-[12px] text-muted truncate mt-0.5 leading-snug">
-                {replyingTo.body || "(attachment)"}
+                {replyingTo.body || (replyingTo.imageUrl ? "(image)" : "(attachment)")}
               </p>
             </div>
             <button

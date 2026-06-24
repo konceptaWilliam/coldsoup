@@ -106,7 +106,7 @@ export const messagesRouter = router({
       const admin = createAdminClient();
       let query = admin
         .from("messages")
-        .select("id, body, created_at, edited_at, is_deleted, thread_id, user_id, client_id, attachments, reply_to_id, poll_id, smeter_id, system_event, profiles(id, display_name, avatar_url)")
+        .select("id, body, created_at, edited_at, is_deleted, thread_id, user_id, client_id, attachments, reply_to_id, reply_to_attachment_url, poll_id, smeter_id, system_event, profiles(id, display_name, avatar_url)")
         .eq("thread_id", input.threadId)
         .order("created_at", { ascending: false })
         .limit(input.limit);
@@ -149,6 +149,7 @@ export const messagesRouter = router({
             body: m.is_deleted ? "" : (m.body as string).slice(0, 120),
             author_name:
               (m.profiles as unknown as { display_name: string } | null)?.display_name ?? "Unknown",
+            target_deleted: m.is_deleted,
           },
         ])
       );
@@ -242,7 +243,19 @@ export const messagesRouter = router({
         // never leaves the server (the client only hid it before).
         body: m.is_deleted ? "" : m.body,
         attachments: m.is_deleted ? [] : m.attachments,
-        reply_to: m.reply_to_id ? (replyToMap.get(m.reply_to_id) ?? null) : null,
+        reply_to: m.reply_to_id
+          ? (() => {
+              const base = replyToMap.get(m.reply_to_id);
+              if (!base) return null;
+              const { target_deleted, ...rest } = base;
+              // image_url lives on the reply row, not the target — different
+              // replies to the same message can pick different images.
+              return {
+                ...rest,
+                image_url: target_deleted ? null : (m.reply_to_attachment_url ?? null),
+              };
+            })()
+          : null,
         poll: (m.poll_id ? (pollDataMap.get(m.poll_id) ?? null) : null),
         smeter: (m.smeter_id ? (smeterDataMap.get(m.smeter_id) ?? null) : null),
         system_event: (m.system_event as unknown ?? null),
@@ -276,6 +289,7 @@ export const messagesRouter = router({
             )
             .default([]),
           replyToId: z.string().uuid().optional(),
+          replyToAttachmentUrl: z.string().url().optional(),
           clientId: z.string().max(64).optional(),
         })
         .refine((d) => d.body.trim().length > 0 || d.attachments.length > 0, {
@@ -331,6 +345,16 @@ export const messagesRouter = router({
           throw new TRPCError({ code: "BAD_REQUEST", message: `Invalid attachment URL: ${att.name}` });
         }
       }
+      if (
+        input.replyToAttachmentUrl &&
+        !isValidAttachmentUrl(input.replyToAttachmentUrl, supabaseUrl)
+      ) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid reply attachment URL" });
+      }
+      // Only meaningful alongside a reply target.
+      const replyToAttachmentUrl = input.replyToId
+        ? (input.replyToAttachmentUrl ?? null)
+        : null;
 
       const [{ data, error }] = await Promise.all([
         admin
@@ -341,6 +365,7 @@ export const messagesRouter = router({
             body: input.body,
             attachments: input.attachments,
             reply_to_id: input.replyToId ?? null,
+            reply_to_attachment_url: replyToAttachmentUrl,
             client_id: input.clientId ?? null,
           })
           .select("id, body, created_at, edited_at, is_deleted, thread_id, user_id, client_id, attachments, reply_to_id, poll_id, smeter_id, system_event, profiles(id, display_name, avatar_url)")
@@ -366,6 +391,7 @@ export const messagesRouter = router({
             body: (replyMsg.body as string).slice(0, 120),
             author_name:
               (replyMsg.profiles as unknown as { display_name: string } | null)?.display_name ?? "Unknown",
+            image_url: replyToAttachmentUrl,
           };
         }
       }
