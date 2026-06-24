@@ -508,9 +508,10 @@ function PollCreateModal({
 }
 
 function formatTime(dateStr: string): string {
-  return new Date(dateStr).toLocaleTimeString("en", {
+  return new Date(dateStr).toLocaleTimeString("en-GB", {
     hour: "2-digit",
     minute: "2-digit",
+    hour12: false,
   });
 }
 

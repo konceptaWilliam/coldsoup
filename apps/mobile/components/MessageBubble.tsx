@@ -32,7 +32,7 @@ interface Props {
 }
 
 function formatTime(dateStr: string) {
-  return new Date(dateStr).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return new Date(dateStr).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false });
 }
 
 // Linkify URLs (tappable) and highlight @DisplayName mentions.
