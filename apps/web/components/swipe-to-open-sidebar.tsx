@@ -31,7 +31,10 @@ export function SwipeToOpenSidebar({ children }: { children: React.ReactNode }) 
 
     if (dx > 60 && dy < dx) {
       if (isOnThread) {
-        router.back();
+        // Edge-only: a mid-screen right-swipe is the swipe-to-reply gesture on a
+        // message. Restricting back to a left-edge start (past the avatar column)
+        // keeps the two from firing together.
+        if (sx < 44) router.back();
       } else if (sx < 80) {
         open();
       }
