@@ -547,12 +547,6 @@ export function Sidebar({
             +
           </button>
         </div>
-        {groups.length > 1 && (
-          <p className="px-[18px] pb-2 font-mono text-[9px] text-muted-2/80 tracking-wide">
-            hold &amp; drag to reorder
-          </p>
-        )}
-
         <GroupNav groups={groups} unread={unread} pathname={pathname} onNavigate={close} />
 
         {/* Bottom user area */}
