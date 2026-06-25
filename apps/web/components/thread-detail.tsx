@@ -3714,7 +3714,11 @@ export function ThreadDetail({
             userScrollingRef.current = false;
           }, 350);
         }}
-        className="flex-1 overflow-y-auto px-4 md:px-6 py-3 md:py-4 flex flex-col"
+        className="flex-1 overflow-y-auto overflow-x-hidden px-4 md:px-6 py-3 md:py-4 flex flex-col"
+        // pan-y: the browser only owns vertical scroll here; horizontal drags
+        // are the swipe-to-reply gesture (handled in JS), so iOS can't rubber-
+        // band / shift the whole window sideways on a message swipe.
+        style={{ touchAction: "pan-y" }}
       >
         {isLoading ? (
           <div className="flex flex-col justify-end min-h-full space-y-4">

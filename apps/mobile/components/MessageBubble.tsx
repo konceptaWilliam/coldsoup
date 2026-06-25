@@ -1,5 +1,12 @@
 import type { ReactNode } from "react";
 import { View, Text, Pressable, Linking } from "react-native";
+import { Gesture, GestureDetector } from "react-native-gesture-handler";
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withSpring,
+  runOnJS,
+} from "react-native-reanimated";
 import { Avatar } from "./Avatar";
 import { AttachmentGrid } from "./AttachmentGrid";
 import { LinkPreview } from "./LinkPreview";
@@ -23,6 +30,7 @@ interface Props {
   onLongPress?: () => void;
   onReactionPress?: (type: ReactionType) => void;
   onReplyPress?: () => void;
+  onSwipeReply?: () => void;
   onAvatarPress?: () => void;
   highlighted?: boolean;
   deliveryStatus?: "sending" | "failed";
@@ -66,12 +74,46 @@ function renderBody(body: string, names: string[], c: Palette) {
   return parts.length ? parts : body;
 }
 
-export function MessageBubble({ message, displayName, avatarUrl, mentionNames, onLongPress, onReactionPress, onReplyPress, onAvatarPress, highlighted, deliveryStatus, onRetry, onDismiss, seenBy }: Props) {
+const SWIPE_TRIGGER = 64;
+const SWIPE_MAX = 88;
+
+export function MessageBubble({ message, displayName, avatarUrl, mentionNames, onLongPress, onReactionPress, onReplyPress, onSwipeReply, onAvatarPress, highlighted, deliveryStatus, onRetry, onDismiss, seenBy }: Props) {
   const { c } = useTheme();
   const { t } = useTranslation();
   const isDeleted = message.is_deleted;
   const firstUrl = !isDeleted ? message.body.match(/https?:\/\/[^\s]+/i)?.[0] : undefined;
+
+  // Swipe right → reply (Messenger-style). Horizontal-only so vertical list
+  // scroll wins; release past the trigger fires the reply.
+  const tx = useSharedValue(0);
+  const swipe = Gesture.Pan()
+    .enabled(!!onSwipeReply)
+    .activeOffsetX(14)
+    .failOffsetY([-14, 14])
+    .onUpdate((e) => {
+      tx.value = Math.max(0, Math.min(e.translationX, SWIPE_MAX));
+    })
+    .onEnd((e) => {
+      if (e.translationX >= SWIPE_TRIGGER && onSwipeReply) runOnJS(onSwipeReply)();
+      tx.value = withSpring(0, { damping: 18, stiffness: 220 });
+    });
+
+  const rowStyle = useAnimatedStyle(() => ({ transform: [{ translateX: tx.value }] }));
+  const iconStyle = useAnimatedStyle(() => {
+    const p = Math.min(1, tx.value / SWIPE_TRIGGER);
+    return { opacity: p, transform: [{ scale: 0.6 + p * 0.4 }] };
+  });
+
   return (
+    <GestureDetector gesture={swipe}>
+      <Animated.View>
+        {/* Reply affordance revealed under the row as it slides right. */}
+        <View pointerEvents="none" style={{ position: "absolute", left: 18, top: 0, bottom: 0, justifyContent: "center" }}>
+          <Animated.View style={iconStyle}>
+            <Text style={{ fontSize: 20, color: c.muted }}>{"↩︎"}</Text>
+          </Animated.View>
+        </View>
+        <Animated.View style={rowStyle}>
     <Pressable
       onLongPress={onLongPress}
       delayLongPress={250}
@@ -165,5 +207,8 @@ export function MessageBubble({ message, displayName, avatarUrl, mentionNames, o
         )}
       </View>
     </Pressable>
+        </Animated.View>
+      </Animated.View>
+    </GestureDetector>
   );
 }

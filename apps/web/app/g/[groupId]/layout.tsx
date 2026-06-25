@@ -35,8 +35,9 @@ export default async function GroupLayout({
   // Fetch all groups the user belongs to
   const { data: memberships } = await supabase
     .from("group_memberships")
-    .select("group_id, groups(id, name)")
-    .eq("user_id", user.id);
+    .select("group_id, sort_order, groups(id, name)")
+    .eq("user_id", user.id)
+    .order("sort_order", { ascending: true, nullsFirst: false });
 
   const groups = (memberships ?? [])
     .map((m) => m.groups)

@@ -22,8 +22,10 @@ export const groupsRouter = router({
 
     const { data, error } = await supabase
       .from("group_memberships")
-      .select("group_id, role, groups(id, name, created_at)")
-      .eq("user_id", profile.id);
+      .select("group_id, role, sort_order, groups(id, name, created_at)")
+      .eq("user_id", profile.id)
+      // Caller's chosen order; never-reordered groups fall to the bottom.
+      .order("sort_order", { ascending: true, nullsFirst: false });
 
     if (error) {
       throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: error.message });
@@ -33,6 +35,31 @@ export const groupsRouter = router({
       .map((m) => ({ ...(m.groups as unknown as { id: string; name: string; created_at: string }), myRole: m.role }))
       .filter((g) => g.id) as Array<{ id: string; name: string; created_at: string; myRole: string }>;
   }),
+
+  // Persist the caller's sidebar group order. Only touches the caller's own
+  // membership rows, so each member arranges their own list.
+  reorder: protectedProcedure
+    .input(z.object({ groupIds: z.array(z.string().uuid()).min(1) }))
+    .mutation(async ({ ctx, input }) => {
+      const { profile } = ctx;
+      const admin = createAdminClient();
+
+      const results = await Promise.all(
+        input.groupIds.map((groupId, i) =>
+          admin
+            .from("group_memberships")
+            .update({ sort_order: i })
+            .eq("user_id", profile.id)
+            .eq("group_id", groupId)
+        )
+      );
+      const failed = results.find((r) => r.error);
+      if (failed?.error) {
+        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: failed.error.message });
+      }
+
+      return { success: true };
+    }),
 
   // Per-group unread counts for the sidebar dots. A thread is "unread" when its
   // updated_at (bumped on every new message) is newer than the caller's

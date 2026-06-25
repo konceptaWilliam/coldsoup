@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { SearchDialog } from "./search-dialog";
@@ -188,6 +188,235 @@ export function CreateGroupModal({ onClose }: { onClose: () => void }) {
   );
 }
 
+type UnreadMap = Record<string, { unread: number; urgent: number }>;
+
+// Group list with hold-to-drag reordering. Long-press a row to pick it up, drag
+// to a new slot, release to drop. Order persists per-user via groups.reorder.
+function GroupNav({
+  groups,
+  unread,
+  pathname,
+  onNavigate,
+}: {
+  groups: Group[];
+  unread: UnreadMap;
+  pathname: string;
+  onNavigate: () => void;
+}) {
+  const router = useRouter();
+  const utils = trpc.useUtils();
+  const reorder = trpc.groups.reorder.useMutation({
+    onError: () => utils.groups.list.invalidate(),
+  });
+
+  const [items, setItems] = useState<Group[]>(groups);
+  const [dragId, setDragId] = useState<string | null>(null);
+
+  const itemsRef = useRef<Group[]>(groups);
+  const dragIdRef = useRef<string | null>(null);
+  const didDragRef = useRef(false);
+  const cancelTapRef = useRef(false);
+  const startRef = useRef<{ x: number; y: number } | null>(null);
+  const lpTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const rowRefs = useRef<Map<string, HTMLElement | null>>(new Map());
+  const orderAtDragStart = useRef<string>("");
+
+  itemsRef.current = items;
+
+  // Reconcile with the server membership set without clobbering the user's
+  // chosen order. The `groups` prop is SSR'd once and keeps the original DB
+  // order, so re-seeding from it directly would snap a just-dropped reorder
+  // back. Instead: keep the current order, refresh names, append any new groups
+  // at the end, drop any the user left. (Mid-drag the prop never changes, so no
+  // guard against `dragId` is needed.)
+  useEffect(() => {
+    setItems((prev) => {
+      const byId = new Map(groups.map((g) => [g.id, g]));
+      const kept = prev
+        .filter((p) => byId.has(p.id))
+        .map((p) => byId.get(p.id)!);
+      const keptIds = new Set(kept.map((g) => g.id));
+      const added = groups.filter((g) => !keptIds.has(g.id));
+      const merged = [...kept, ...added];
+      const same =
+        merged.length === prev.length &&
+        merged.every((g, i) => g.id === prev[i].id && g.name === prev[i].name);
+      return same ? prev : merged;
+    });
+  }, [groups]);
+
+  function clearLongPress() {
+    if (lpTimer.current) {
+      clearTimeout(lpTimer.current);
+      lpTimer.current = null;
+    }
+  }
+
+  function beginDrag(id: string) {
+    dragIdRef.current = id;
+    didDragRef.current = true;
+    orderAtDragStart.current = itemsRef.current.map((g) => g.id).join(",");
+    setDragId(id);
+    if (typeof navigator !== "undefined" && navigator.vibrate) navigator.vibrate(10);
+  }
+
+  // While dragging, listen on the window so the gesture survives the pointer
+  // leaving a row (and so the rows reorder live under the finger/cursor).
+  useEffect(() => {
+    if (!dragId) return;
+
+    function onMove(e: PointerEvent) {
+      if (!dragIdRef.current) return;
+      e.preventDefault();
+      const y = e.clientY;
+      const list = itemsRef.current;
+      let target = -1;
+      for (let i = 0; i < list.length; i++) {
+        const el = rowRefs.current.get(list[i].id);
+        if (!el) continue;
+        const r = el.getBoundingClientRect();
+        if (y >= r.top && y <= r.bottom) {
+          target = i;
+          break;
+        }
+      }
+      if (target === -1) return;
+      const from = list.findIndex((g) => g.id === dragIdRef.current);
+      if (from === -1 || from === target) return;
+      const next = [...list];
+      const [moved] = next.splice(from, 1);
+      next.splice(target, 0, moved);
+      setItems(next);
+    }
+
+    function onUp() {
+      dragIdRef.current = null;
+      setDragId(null);
+      const ids = itemsRef.current.map((g) => g.id);
+      // Only persist when the order actually changed.
+      if (ids.join(",") !== orderAtDragStart.current) {
+        reorder.mutate({ groupIds: ids });
+      }
+    }
+
+    window.addEventListener("pointermove", onMove, { passive: false });
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+    };
+  }, [dragId, reorder]);
+
+  function onPointerDown(e: React.PointerEvent, id: string) {
+    if (e.button !== 0 && e.pointerType === "mouse") return;
+    startRef.current = { x: e.clientX, y: e.clientY };
+    didDragRef.current = false;
+    cancelTapRef.current = false;
+    clearLongPress();
+    lpTimer.current = setTimeout(() => beginDrag(id), 250);
+  }
+
+  function onPointerMove(e: React.PointerEvent) {
+    const start = startRef.current;
+    if (!start || dragIdRef.current) return;
+    // Moved before the long-press fired → it's a scroll/tap-cancel, not a drag.
+    if (Math.abs(e.clientX - start.x) > 8 || Math.abs(e.clientY - start.y) > 8) {
+      clearLongPress();
+      startRef.current = null;
+      cancelTapRef.current = true;
+    }
+  }
+
+  function onPointerUp(id: string) {
+    clearLongPress();
+    startRef.current = null;
+    // The window handler persists/ends an actual drag; here we only resolve a
+    // plain tap into navigation.
+    if (!didDragRef.current && !cancelTapRef.current) {
+      router.push(`/g/${id}`);
+      onNavigate();
+    }
+  }
+
+  if (groups.length === 0) {
+    return (
+      <nav className="flex-1 overflow-y-auto px-2">
+        <p className="px-3 text-xs text-muted">No groups yet</p>
+      </nav>
+    );
+  }
+
+  return (
+    <nav
+      className="flex-1 overflow-y-auto px-2"
+      style={{ touchAction: dragId ? "none" : undefined }}
+    >
+      {items.map((group) => {
+        const href = `/g/${group.id}`;
+        const isActive = pathname.startsWith(href);
+        const isDragging = dragId === group.id;
+        return (
+          <div
+            key={group.id}
+            ref={(el) => {
+              rowRefs.current.set(group.id, el);
+            }}
+            role="link"
+            tabIndex={0}
+            onPointerDown={(e) => onPointerDown(e, group.id)}
+            onPointerMove={onPointerMove}
+            onPointerUp={() => onPointerUp(group.id)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                router.push(href);
+                onNavigate();
+              }
+            }}
+            className={`group/row flex items-center justify-between w-full px-2.5 py-[11px] md:py-[7px] my-px font-mono text-[13px] select-none cursor-pointer transition-all duration-150 ${
+              isActive
+                ? "bg-pastel-tint text-pastel-ink border border-pastel-deep font-semibold"
+                : "text-ink border border-transparent hover:bg-border/50"
+            } ${isDragging ? "opacity-80 bg-border/60 border-border-strong shadow-sm scale-[1.01]" : ""}`}
+            style={{ touchAction: dragId ? "none" : "manipulation" }}
+          >
+            <span className="flex items-center gap-2 min-w-0">
+              {/* Drag-handle affordance — signals the row is reorderable. */}
+              <span
+                aria-hidden
+                title="Hold and drag to reorder"
+                className={`flex-shrink-0 leading-none text-[10px] tracking-[-1px] transition-opacity ${
+                  isDragging
+                    ? "text-pastel-deep opacity-100"
+                    : "text-muted-2 opacity-40 group-hover/row:opacity-100"
+                }`}
+              >
+                ⠿
+              </span>
+              <span className="lowercase truncate">{group.name}</span>
+            </span>
+            {(unread[group.id]?.unread ?? 0) > 0 && (
+              <span
+                className="inline-block w-2 h-2 flex-shrink-0"
+                style={{
+                  background:
+                    (unread[group.id]?.urgent ?? 0) > 0
+                      ? "hsl(0 75% 52%)"
+                      : "hsl(0 70% 78%)",
+                  border: `1px solid ${(unread[group.id]?.urgent ?? 0) > 0 ? "hsl(0 65% 38%)" : "hsl(0 50% 62%)"}`,
+                  transform: "rotate(45deg)",
+                }}
+              />
+            )}
+          </div>
+        );
+      })}
+    </nav>
+  );
+}
+
 export function Sidebar({
   groups,
   userDisplayName,
@@ -306,7 +535,7 @@ export function Sidebar({
         </button>
 
         {/* Group list header */}
-        <div className="px-[18px] pb-2 flex items-center justify-between">
+        <div className="px-[18px] pb-0.5 flex items-center justify-between">
           <span className="font-mono text-[10px] text-muted-2 uppercase tracking-[0.18em]">
             Groups
           </span>
@@ -318,51 +547,13 @@ export function Sidebar({
             +
           </button>
         </div>
+        {groups.length > 1 && (
+          <p className="px-[18px] pb-2 font-mono text-[9px] text-muted-2/80 tracking-wide">
+            hold &amp; drag to reorder
+          </p>
+        )}
 
-        <nav className="flex-1 overflow-y-auto px-2">
-          {groups.length === 0 ? (
-            <p className="px-3 text-xs text-muted">No groups yet</p>
-          ) : (
-            groups.map((group) => {
-              const href = `/g/${group.id}`;
-              const isActive = pathname.startsWith(href);
-              return (
-                <Link
-                  key={group.id}
-                  href={href}
-                  onClick={close}
-                  className={`flex items-center justify-between w-full px-2.5 py-[11px] md:py-[7px] my-px font-mono text-[13px] transition-all duration-150 ${
-                    isActive
-                      ? "bg-pastel-tint text-pastel-ink border border-pastel-deep font-semibold"
-                      : "text-ink border border-transparent hover:bg-border/50"
-                  }`}
-                >
-                  <span className="flex items-center gap-2">
-                    <span
-                      className={isActive ? "text-pastel-deep" : "text-muted-2"}
-                    >
-                      ·
-                    </span>
-                    <span className="lowercase">{group.name}</span>
-                  </span>
-                  {(unread[group.id]?.unread ?? 0) > 0 && (
-                    <span
-                      className="inline-block w-2 h-2 flex-shrink-0"
-                      style={{
-                        background:
-                          (unread[group.id]?.urgent ?? 0) > 0
-                            ? "hsl(0 75% 52%)"
-                            : "hsl(0 70% 78%)",
-                        border: `1px solid ${(unread[group.id]?.urgent ?? 0) > 0 ? "hsl(0 65% 38%)" : "hsl(0 50% 62%)"}`,
-                        transform: "rotate(45deg)",
-                      }}
-                    />
-                  )}
-                </Link>
-              );
-            })
-          )}
-        </nav>
+        <GroupNav groups={groups} unread={unread} pathname={pathname} onNavigate={close} />
 
         {/* Bottom user area */}
         <div className="border-t border-border p-3">

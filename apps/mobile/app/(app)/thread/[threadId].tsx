@@ -748,6 +748,7 @@ export default function ThreadScreen() {
               mentionNames={mentionTokens}
               highlighted={highlightId === item.id}
               onReplyPress={item.reply_to ? () => jumpToMessage(item.reply_to!.id) : undefined}
+              onSwipeReply={interactive && !item.is_deleted ? () => { haptics.tapLight(); setEditingId(null); setReplyingTo({ id: item.id, author: profile?.display_name ?? "Unknown", body: item.body }); } : undefined}
               onAvatarPress={() => setProfileTarget({ id: item.user_id, name: profile?.display_name ?? "Unknown", avatarUrl: profile?.avatar_url ?? null })}
               seenBy={item.id === seenMsgId ? seenReaders : undefined}
               deliveryStatus={deliveryStatus}

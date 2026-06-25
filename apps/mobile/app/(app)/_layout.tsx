@@ -63,7 +63,10 @@ export default function AppLayout() {
         <Stack.Screen name="set-password" options={{ headerShown: false, gestureEnabled: false }} />
         <Stack.Screen name="group/[groupId]" options={{ headerShown: false, gestureEnabled: false }} />
         <Stack.Screen name="members/[groupId]" options={{ headerShown: true, title: "", ...headerBase }} />
-        <Stack.Screen name="thread/[threadId]" options={{ headerShown: false }} />
+        {/* gestureEnabled off: the iOS edge swipe-back races the swipe-to-reply
+            gesture on messages and slides the whole screen. Back via the header
+            chevron (consistent with group/[groupId]). */}
+        <Stack.Screen name="thread/[threadId]" options={{ headerShown: false, gestureEnabled: false }} />
         <Stack.Screen name="smeter/[smeterId]" options={{ headerShown: false, presentation: "modal", gestureEnabled: true, gestureDirection: "vertical" }} />
       </Stack>
       </AppLockProvider>
