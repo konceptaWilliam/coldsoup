@@ -150,6 +150,9 @@
   },
   "threadMeta": {
     "title": "Thread details",
+    "name": "Thread name",
+    "rename": "Rename",
+    "renamePlaceholder": "Thread name",
     "owner": "Assignee",
     "unassigned": "Unassigned",
     "dueDate": "Due date",

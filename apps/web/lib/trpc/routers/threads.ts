@@ -136,6 +136,45 @@ export const threadsRouter = router({
       return { success: true };
     }),
 
+  // Rename a thread. Any group member can rename — threads are shared, not owned.
+  rename: protectedProcedure
+    .input(
+      z.object({
+        threadId: z.string().uuid(),
+        title: z.string().min(1).max(200),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { supabase, profile } = ctx;
+      const admin = createAdminClient();
+
+      const { data: thread } = await supabase
+        .from("threads")
+        .select("group_id")
+        .eq("id", input.threadId)
+        .single();
+      if (!thread) throw new TRPCError({ code: "NOT_FOUND" });
+
+      const { data: membership } = await supabase
+        .from("group_memberships")
+        .select("id")
+        .eq("group_id", thread.group_id)
+        .eq("user_id", profile.id)
+        .single();
+      if (!membership) throw new TRPCError({ code: "FORBIDDEN" });
+
+      const title = input.title.trim();
+      if (!title) throw new TRPCError({ code: "BAD_REQUEST", message: "Title required" });
+
+      const { error } = await admin
+        .from("threads")
+        .update({ title })
+        .eq("id", input.threadId);
+      if (error) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: error.message });
+
+      return { success: true };
+    }),
+
   create: protectedProcedure
     .input(
       z.object({

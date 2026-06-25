@@ -82,8 +82,9 @@ export default function ThreadScreen() {
   const { data: reads } = trpc.threads.reads.useQuery({ threadId }, { enabled: !!threadId });
   const markReadServer = trpc.threads.markRead.useMutation();
   const { data: threadMeta } = trpc.threads.get.useQuery({ threadId }, { enabled: !!threadId });
-  // `title` param is lost on reload — fall back to the fetched thread title.
-  const threadTitle = title || (threadMeta as { title?: string } | undefined)?.title || "";
+  // Prefer the fetched title (stays fresh after a rename); the route param is
+  // the instant-paint fallback before the query resolves / on reload.
+  const threadTitle = (threadMeta as { title?: string } | undefined)?.title || title || "";
   const { data: members } = trpc.messages.groupMembers.useQuery(
     { groupId: groupId ?? "" },
     { enabled: !!groupId }

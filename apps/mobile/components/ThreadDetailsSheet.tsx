@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Modal, View, Text, Pressable, ScrollView, Platform, ActivityIndicator, Alert } from "react-native";
+import { Modal, View, Text, TextInput, Pressable, ScrollView, Platform, ActivityIndicator, Alert } from "react-native";
 import { router } from "expo-router";
 import { Feather } from "@expo/vector-icons";
 import { useTranslation } from "react-i18next";
@@ -46,11 +46,29 @@ export function ThreadDetailsSheet({ visible, threadId, onClose }: Props) {
 
   const [dueDate, setDueDate] = useState<string | null>(null);
   const [showPicker, setShowPicker] = useState(false);
+  const [title, setTitle] = useState("");
 
+  const metaTitle = (meta as { title?: string } | undefined)?.title ?? "";
   useEffect(() => {
     if (!meta) return;
     setDueDate((meta as { due_date: string | null }).due_date ?? null);
+    setTitle((meta as { title?: string }).title ?? "");
   }, [meta, visible]);
+
+  const rename = trpc.threads.rename.useMutation({
+    onSuccess: () => {
+      utils.threads.get.invalidate({ threadId });
+      utils.threads.list.invalidate();
+      haptics.success();
+    },
+    onError: (_e) => {
+      // Revert the field to the persisted name on failure.
+      setTitle(metaTitle);
+    },
+  });
+
+  const trimmedTitle = title.trim();
+  const titleChanged = trimmedTitle.length > 0 && trimmedTitle !== metaTitle;
 
   const { data: notifPrefs } = trpc.notifications.prefs.useQuery();
   const isMuted = !!notifPrefs?.threadIds.includes(threadId);
@@ -132,6 +150,29 @@ export function ThreadDetailsSheet({ visible, threadId, onClose }: Props) {
               <ActivityIndicator color={c.ink} style={{ paddingVertical: 24 }} />
             ) : (
               <>
+                {/* Thread name — any group member can rename */}
+                <Label>{t("threadMeta.name")}</Label>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 24 }}>
+                  <TextInput
+                    value={title}
+                    onChangeText={(v) => setTitle(v.replace(/ /g, "_"))}
+                    maxLength={200}
+                    placeholder={t("threadMeta.renamePlaceholder")}
+                    placeholderTextColor={c.muted}
+                    returnKeyType="done"
+                    onSubmitEditing={() => { if (titleChanged && !rename.isPending) rename.mutate({ threadId, title: trimmedTitle }); }}
+                    style={{ flex: 1, borderWidth: 1, borderColor: c.border, backgroundColor: c.surface2, paddingHorizontal: 12, paddingVertical: 10, fontSize: 16, color: c.ink }}
+                  />
+                  <Pressable
+                    onPress={() => { haptics.selection(); rename.mutate({ threadId, title: trimmedTitle }); }}
+                    disabled={!titleChanged || rename.isPending}
+                    accessibilityRole="button"
+                    style={({ pressed }) => ({ borderWidth: 1, borderColor: c.border, backgroundColor: c.surface2, paddingHorizontal: 12, paddingVertical: 10, opacity: (!titleChanged || rename.isPending) ? 0.4 : pressed ? 0.6 : 1 })}
+                  >
+                    <Text style={{ fontFamily: "monospace", fontSize: 12, color: c.ink }}>{t("threadMeta.rename")}</Text>
+                  </Pressable>
+                </View>
+
                 {/* Assignee — always the thread's creator, read-only */}
                 <Label>{t("threadMeta.owner")}</Label>
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 24 }}>

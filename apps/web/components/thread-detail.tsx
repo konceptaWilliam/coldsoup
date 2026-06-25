@@ -1515,12 +1515,14 @@ function ThreadDetailsPanel({
   const { data: meta, isLoading } = trpc.threads.get.useQuery({ threadId });
   const { data: notifPrefs } = trpc.notifications.prefs.useQuery();
   const [dueDate, setDueDate] = useState<string | null>(null);
+  const [title, setTitle] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!meta) return;
     setDueDate((meta as { due_date: string | null }).due_date ?? null);
+    setTitle((meta as { title?: string }).title ?? "");
   }, [meta]);
 
   const creator =
@@ -1543,6 +1545,18 @@ function ThreadDetailsPanel({
     },
     onError: (err) => setError(err.message),
   });
+
+  const rename = trpc.threads.rename.useMutation({
+    onSuccess: () => {
+      utils.threads.get.invalidate({ threadId });
+      utils.threads.list.invalidate({ groupId });
+    },
+    onError: (err) => setError(err.message),
+  });
+
+  const metaTitle = (meta as { title?: string } | undefined)?.title ?? "";
+  const trimmedTitle = title.trim();
+  const titleChanged = trimmedTitle.length > 0 && trimmedTitle !== metaTitle;
 
   const setMute = trpc.notifications.setMute.useMutation({
     onMutate: async ({ targetId, muted }) => {
@@ -1612,6 +1626,37 @@ function ThreadDetailsPanel({
             </div>
           ) : (
             <>
+              <div>
+                <label
+                  htmlFor="thread-detail-title"
+                  className="block font-mono text-[10px] text-muted uppercase tracking-wider mb-2"
+                >
+                  Thread name
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    id="thread-detail-title"
+                    value={title}
+                    onChange={(e) => setTitle(e.target.value.replace(/ /g, "_"))}
+                    maxLength={200}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && titleChanged && !rename.isPending) {
+                        rename.mutate({ threadId, title: trimmedTitle });
+                      }
+                    }}
+                    className="flex-1 min-w-0 border border-border bg-surface-2 px-3 py-2 font-mono text-sm text-ink lowercase focus:outline-none focus:border-ink"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => rename.mutate({ threadId, title: trimmedTitle })}
+                    disabled={!titleChanged || rename.isPending}
+                    className="font-mono text-xs text-ink border border-border bg-surface-2 px-3 py-2 hover:border-border-strong transition-colors disabled:opacity-40"
+                  >
+                    {rename.isPending ? "…" : "Rename"}
+                  </button>
+                </div>
+              </div>
+
               <div>
                 <p className="font-mono text-[10px] text-muted uppercase tracking-wider mb-2">
                   Assignee
@@ -1875,6 +1920,7 @@ export function ThreadDetail({
   const presenceChannelRef = useRef<RealtimeChannel | null>(null);
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [threadStatus, setThreadStatus] = useState<ThreadStatus>(initialStatus);
+  const [threadTitle, setThreadTitle] = useState(initialTitle);
   const [showDetails, setShowDetails] = useState(false);
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [isRecording, setIsRecording] = useState(false);
@@ -2760,8 +2806,9 @@ export function ThreadDetail({
           filter: `id=eq.${threadId}`,
         },
         (payload) => {
-          const updated = payload.new as { status: ThreadStatus };
+          const updated = payload.new as { status: ThreadStatus; title: string };
           setThreadStatus(updated.status);
+          if (updated.title) setThreadTitle(updated.title);
           utils.threads.list.invalidate({ groupId });
         },
       )
@@ -3667,7 +3714,7 @@ export function ThreadDetail({
             >
               <h1 className="font-mono text-sm font-semibold text-ink truncate lowercase">
                 <span className="text-muted-2 normal-case"># </span>
-                {initialTitle}
+                {threadTitle}
               </h1>
               <svg
                 xmlns="http://www.w3.org/2000/svg"
@@ -3685,7 +3732,7 @@ export function ThreadDetail({
             <StatusControl
               threadId={threadId}
               currentStatus={threadStatus}
-              threadTitle={initialTitle}
+              threadTitle={threadTitle}
             />
           </div>
         </div>
@@ -3694,7 +3741,7 @@ export function ThreadDetail({
           <StatusControl
             threadId={threadId}
             currentStatus={threadStatus}
-            threadTitle={initialTitle}
+            threadTitle={threadTitle}
           />
         </div>
       </header>
