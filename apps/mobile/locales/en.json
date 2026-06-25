@@ -292,7 +292,8 @@
     "tapResults": "Tap for results →",
     "dueSet": "{{name}} set thread due date to {{date}}",
     "dueCleared": "{{name}} cleared the thread due date",
-    "created": "{{name}} created this thread"
+    "created": "{{name}} created this thread",
+    "renamed": "{{name}} renamed the thread to {{title}}"
   },
   "preview": {
     "smeter": "S-meter",

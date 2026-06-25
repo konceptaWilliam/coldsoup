@@ -150,7 +150,7 @@ export const threadsRouter = router({
 
       const { data: thread } = await supabase
         .from("threads")
-        .select("group_id")
+        .select("group_id, title")
         .eq("id", input.threadId)
         .single();
       if (!thread) throw new TRPCError({ code: "NOT_FOUND" });
@@ -166,11 +166,21 @@ export const threadsRouter = router({
       const title = input.title.trim();
       if (!title) throw new TRPCError({ code: "BAD_REQUEST", message: "Title required" });
 
+      const previousTitle = (thread.title as string | null) ?? "";
+      if (title === previousTitle) return { success: true };
+
       const { error } = await admin
         .from("threads")
         .update({ title })
         .eq("id", input.threadId);
       if (error) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: error.message });
+
+      await postSystemMessage(admin, input.threadId, {
+        kind: "thread_renamed",
+        actorName: profile.display_name,
+        from: previousTitle,
+        to: title,
+      });
 
       return { success: true };
     }),

@@ -39,6 +39,7 @@ export function SystemMessage({ event }: { event: SystemEvent }) {
       ? t("system.dueSet", { name: event.actorName, date: formatDue(event.dueDate) })
       : t("system.dueCleared", { name: event.actorName });
   else if (event.kind === "thread_created") text = t("system.created", { name: event.actorName });
+  else if (event.kind === "thread_renamed") text = t("system.renamed", { name: event.actorName, title: event.to });
 
   return (
     <View style={{ alignItems: "center", paddingVertical: 10, paddingHorizontal: 24 }}>

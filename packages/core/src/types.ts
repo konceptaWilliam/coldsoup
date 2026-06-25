@@ -71,7 +71,8 @@ export type SystemEvent =
   | { kind: "status"; actorName: string; from: ThreadStatus; to: ThreadStatus }
   | { kind: "smeter_done"; smeterId: string; smeterTitle: string | null }
   | { kind: "due_date"; actorName: string; dueDate: string | null }
-  | { kind: "thread_created"; actorName: string };
+  | { kind: "thread_created"; actorName: string }
+  | { kind: "thread_renamed"; actorName: string; from: string; to: string };
 
 export type SMeterMode = "weekly" | "dates";
 

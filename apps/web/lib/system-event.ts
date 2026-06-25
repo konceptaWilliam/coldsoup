@@ -20,6 +20,8 @@ export function systemEventText(e: SystemEvent): string {
         : `${e.actorName} cleared the thread due date`;
     case "thread_created":
       return `${e.actorName} created this thread`;
+    case "thread_renamed":
+      return `${e.actorName} renamed the thread to ${e.to}`;
     default:
       return "";
   }
