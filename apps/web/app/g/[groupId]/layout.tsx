@@ -51,7 +51,6 @@ export default async function GroupLayout({
             groups={groups}
             userId={profile.id}
             userDisplayName={profile.display_name}
-            avatarUrl={profile.avatar_url ?? null}
           />
           <SwipeToOpenSidebar>{children}</SwipeToOpenSidebar>
         </div>

@@ -102,8 +102,8 @@ function formatDue(ymd: string): string {
   });
 }
 
-function MemberAvatar({ member }: { member: { id: string; display_name: string; avatar_url: string | null } }) {
-  return <Avatar userId={member.id} name={member.display_name} avatarUrl={member.avatar_url} size={20} />;
+function MemberAvatar({ member }: { member: { id: string; display_name: string } }) {
+  return <Avatar userId={member.id} name={member.display_name} size={20} />;
 }
 
 function BellOffIcon({ className = "" }: { className?: string }) {

@@ -122,7 +122,6 @@ type FailedEntry = {
 type ProfileTarget = {
   id: string | null;
   name: string;
-  avatarUrl: string | null;
 };
 
 const DRAFT_PREFIX = "coldsoup:draft:";
@@ -317,7 +316,6 @@ function PollView({
                       <Avatar
                         userId={v.id}
                         name={v.display_name}
-                        avatarUrl={v.avatar_url}
                         size={16}
                       />
                       <span className="font-mono text-[10px] text-ink sm:hidden">
@@ -1299,7 +1297,6 @@ function ProfileCard({
           <Avatar
             userId={target.id}
             name={target.name}
-            avatarUrl={target.avatarUrl}
             size={96}
             animate="always"
           />
@@ -1642,7 +1639,6 @@ function ThreadDetailsPanel({
                     <Avatar
                       userId={creator.id}
                       name={creator.display_name}
-                      avatarUrl={creator.avatar_url}
                       animate="hover"
                     />
                     <span className="text-sm text-ink">
@@ -3633,7 +3629,7 @@ export function ThreadDetail({
   const seenByMessage = useMemo(() => {
     const result: Record<
       string,
-      Array<{ id: string; name: string; avatarUrl: string | null }>
+      Array<{ id: string; name: string }>
     > = {};
     if (!myInfo) return result;
     const rows = readReceipts as Array<{
@@ -3661,7 +3657,6 @@ export function ThreadDetail({
       (result[target.id] ??= []).push({
         id: r.user_id,
         name: r.display_name,
-        avatarUrl: r.avatar_url,
       });
     }
     return result;
@@ -3914,7 +3909,6 @@ export function ThreadDetail({
                                 setProfileTarget({
                                   id: msg.user_id,
                                   name,
-                                  avatarUrl: msg.profiles?.avatar_url ?? null,
                                 })
                               }
                               className="block text-left hover:opacity-80 transition-opacity"
@@ -3923,7 +3917,6 @@ export function ThreadDetail({
                               <Avatar
                                 userId={msg.user_id}
                                 name={name}
-                                avatarUrl={msg.profiles?.avatar_url}
                                 animate="hover"
                               />
                             </button>
@@ -4416,7 +4409,6 @@ export function ThreadDetail({
                                   <Avatar
                                     userId={reader.id}
                                     name={reader.name}
-                                    avatarUrl={reader.avatarUrl}
                                     size={16}
                                   />
                                 </div>

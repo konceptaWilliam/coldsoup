@@ -3,6 +3,7 @@ import { TRPCError } from "@trpc/server";
 import { Resend } from "resend";
 import { router, protectedProcedure } from "../trpc";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { profileUpdateInput } from "@/lib/profile-policy";
 
 export const profileRouter = router({
   get: protectedProcedure.query(async ({ ctx }) => {
@@ -23,19 +24,13 @@ export const profileRouter = router({
   }),
 
   update: protectedProcedure
-    .input(
-      z.object({
-        displayName: z.string().min(1).max(20).optional(),
-        avatarUrl: z.string().url().nullable().optional(),
-      })
-    )
+    .input(profileUpdateInput)
     .mutation(async ({ ctx, input }) => {
       const { profile } = ctx;
       const admin = createAdminClient();
 
       const updates: Record<string, unknown> = {};
       if (input.displayName !== undefined) updates.display_name = input.displayName;
-      if (input.avatarUrl !== undefined) updates.avatar_url = input.avatarUrl;
 
       const { data, error } = await admin
         .from("profiles")

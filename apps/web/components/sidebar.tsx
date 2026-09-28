@@ -423,12 +423,10 @@ export function Sidebar({
   groups,
   userId,
   userDisplayName,
-  avatarUrl,
 }: {
   groups: Group[];
   userId: string;
   userDisplayName: string;
-  avatarUrl: string | null;
 }) {
   const pathname = usePathname();
   const [searchOpen, setSearchOpen] = useState(false);
@@ -609,7 +607,6 @@ export function Sidebar({
             <Avatar
               userId={userId}
               name={userDisplayName}
-              avatarUrl={avatarUrl}
               size={28}
               animate="hover"
             />
