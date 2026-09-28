@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { SearchDialog } from "./search-dialog";
+import { Avatar } from "./avatar";
 import { useMobileSidebar } from "@/lib/mobile-sidebar-context";
 import { setLastSeen } from "@/lib/unread-context";
 import { trpc } from "@/lib/trpc/client";
@@ -420,10 +421,12 @@ function GroupNav({
 
 export function Sidebar({
   groups,
+  userId,
   userDisplayName,
   avatarUrl,
 }: {
   groups: Group[];
+  userId: string;
   userDisplayName: string;
   avatarUrl: string | null;
 }) {
@@ -431,7 +434,6 @@ export function Sidebar({
   const [searchOpen, setSearchOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [avatarError, setAvatarError] = useState(false);
   const utils = trpc.useUtils();
 
   const markAllRead = trpc.threads.markAllRead.useMutation({
@@ -489,13 +491,6 @@ export function Sidebar({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
-
-  const initials = userDisplayName
-    .split(" ")
-    .map((n) => n[0])
-    .slice(0, 2)
-    .join("")
-    .toUpperCase();
 
   return (
     <>
@@ -611,24 +606,13 @@ export function Sidebar({
             settings
           </Link>
           <div className="flex items-center gap-2 min-w-0">
-            <div
-              className="w-7 h-7 flex-shrink-0 border border-border overflow-hidden flex items-center justify-center font-mono text-[10px] font-semibold"
-              style={{
-                background: "hsl(180 30% 92%)",
-                color: "hsl(180 40% 28%)",
-              }}
-            >
-              {avatarUrl && !avatarError ? (
-                <img
-                  src={avatarUrl}
-                  alt={userDisplayName}
-                  className="w-full h-full object-cover"
-                  onError={() => setAvatarError(true)}
-                />
-              ) : (
-                initials
-              )}
-            </div>
+            <Avatar
+              userId={userId}
+              name={userDisplayName}
+              avatarUrl={avatarUrl}
+              size={28}
+              animate="hover"
+            />
             <div className="min-w-0">
               <p className="text-xs font-medium text-ink truncate leading-tight">
                 {userDisplayName}

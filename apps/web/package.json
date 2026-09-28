@@ -11,6 +11,7 @@
     "test": "node --test --experimental-strip-types \"__tests__/**/*.test.ts\""
   },
   "dependencies": {
+    "@blobatar/react": "^2.7.0",
     "@supabase/ssr": "^0.10.2",
     "@supabase/supabase-js": "^2.103.3",
     "@tanstack/query-sync-storage-persister": "^5.101.0",
@@ -20,6 +21,7 @@
     "@trpc/next": "^11.16.0",
     "@trpc/react-query": "^11.16.0",
     "@trpc/server": "^11.16.0",
+    "blobatar": "^2.7.0",
     "ldrs": "^1.1.9",
     "next": "^14.2.35",
     "react": "^18",

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { trpc } from "@/lib/trpc/client";
 import { createClient } from "@/lib/supabase/client";
 import { CreateGroupModal } from "@/components/sidebar";
+import { Avatar } from "@/components/avatar";
 import { WebPushToggle } from "@/components/web-push-toggle";
 import { useTheme, type ThemeMode } from "@/lib/theme-context";
 import { isSoundEnabled, setSoundEnabled, playReceive } from "@/lib/sound";
@@ -305,7 +306,6 @@ function ProfileSection() {
   const [displayName, setDisplayName] = useState("");
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
-  const [avatarImgError, setAvatarImgError] = useState(false);
   const [cropSrc, setCropSrc] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -346,19 +346,10 @@ function ProfileSection() {
     await updateProfile.mutateAsync({
       avatarUrl: `${publicUrl}?t=${Date.now()}`,
     });
-    setAvatarImgError(false);
     setUploading(false);
   }
 
   if (isLoading) return <div className="h-20 bg-border/40 animate-pulse" />;
-
-  const initials =
-    profile?.display_name
-      ?.split(" ")
-      .map((n: string) => n[0])
-      .join("")
-      .toUpperCase()
-      .slice(0, 2) ?? "?";
 
   return (
     <div>
@@ -371,21 +362,16 @@ function ProfileSection() {
           <button
             onClick={() => fileInputRef.current?.click()}
             disabled={uploading}
-            className="relative w-14 h-14 flex-shrink-0 bg-border flex items-center justify-center overflow-hidden hover:opacity-80 transition-opacity disabled:opacity-40 group"
+            className="relative w-14 h-14 flex-shrink-0 flex items-center justify-center overflow-hidden hover:opacity-80 transition-opacity disabled:opacity-40 group"
             title="Change profile picture"
           >
-            {profile?.avatar_url && !avatarImgError ? (
-              <img
-                src={profile.avatar_url}
-                alt={profile.display_name ?? ""}
-                className="w-full h-full object-cover"
-                onError={() => setAvatarImgError(true)}
-              />
-            ) : (
-              <span className="font-mono text-sm font-semibold text-muted">
-                {initials}
-              </span>
-            )}
+            <Avatar
+              userId={profile?.id}
+              name={profile?.display_name ?? ""}
+              avatarUrl={profile?.avatar_url}
+              size={56}
+              animate="always"
+            />
             <span className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
               <span className="font-mono text-[10px] text-white uppercase tracking-wider">
                 {uploading ? "..." : "Edit"}
@@ -411,6 +397,16 @@ function ProfileSection() {
               {profile?.display_name}
             </p>
             <p className="text-xs text-muted">{profile?.email}</p>
+            {profile?.avatar_url && (
+              <button
+                type="button"
+                onClick={() => updateProfile.mutate({ avatarUrl: null })}
+                disabled={uploading || updateProfile.isPending}
+                className="mt-1 font-mono text-[10px] text-muted uppercase tracking-wider hover:text-ink disabled:opacity-40"
+              >
+                Remove photo
+              </button>
+            )}
             {uploadError && (
               <p className="text-xs text-red-600 mt-0.5">{uploadError}</p>
             )}
