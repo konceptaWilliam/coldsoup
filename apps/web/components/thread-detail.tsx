@@ -2,6 +2,9 @@
 
 import { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from "react";
 import { Avatar } from "./avatar";
+import type { Expression } from "blobatar";
+import { happy, love, sad, thinking } from "blobatar/expression";
+import { createGazeField, type GazeField } from "@/lib/gaze-field";
 
 // useLayoutEffect on the client (positions scroll before paint), useEffect on
 // the server to avoid the SSR warning.
@@ -1299,6 +1302,7 @@ function ProfileCard({
             name={target.name}
             size={96}
             animate="always"
+            followPointer
           />
         </div>
         <p className="mt-4 text-base font-semibold text-ink break-words">
@@ -1885,7 +1889,22 @@ export function ThreadDetail({
   // True while the soft keyboard is up — used to drop the composer's safe-area
   // bottom padding (otherwise it leaves a gap between the input and keyboard).
   const [keyboardOpen, setKeyboardOpen] = useState(false);
-  const [typingUsers, setTypingUsers] = useState<string[]>([]);
+  const [typingUsers, setTypingUsers] = useState<{ id: string; name: string }[]>([]);
+  // Short-lived blobatar poses keyed by message id (happy on delivery, love
+  // when someone hearts your message).
+  const [blobMoods, setBlobMoods] = useState<Record<string, Expression>>({});
+  const flashMood = useCallback((messageId: string, pose: Expression, ms: number) => {
+    setBlobMoods((prev) => ({ ...prev, [messageId]: pose }));
+    setTimeout(() => {
+      setBlobMoods((prev) => {
+        if (prev[messageId] !== pose) return prev;
+        const next = { ...prev };
+        delete next[messageId];
+        return next;
+      });
+    }, ms);
+  }, []);
+  const [composerFocused, setComposerFocused] = useState(false);
   const [myInfo, setMyInfo] = useState<{
     id: string;
     display_name: string;
@@ -2431,6 +2450,80 @@ export function ThreadDetail({
     prevLatestMessageIdRef.current = latestMessage.id;
   }, [messages, highlightMessageId, myInfo?.id, scrollToBottom]);
 
+  // Blobs in the thread turn to look at the composer while you type. The
+  // composer only exists while the thread isn't DONE, hence threadStatus.
+  const gazeFieldRef = useRef<GazeField | null>(null);
+  useEffect(() => {
+    const root = scrollContainerRef.current;
+    const target = composerRef.current;
+    if (!root || !target) return;
+    const field = createGazeField(root, target);
+    gazeFieldRef.current = field;
+    const onScroll = () => field.refresh();
+    root.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      root.removeEventListener("scroll", onScroll);
+      field.stop();
+      gazeFieldRef.current = null;
+    };
+  }, [threadStatus]);
+
+  useEffect(() => {
+    const field = gazeFieldRef.current;
+    if (!field) return;
+    field.setActive(composerFocused && body.trim().length > 0);
+    field.refresh(); // composer grows as you type; re-aim at its new centre
+  }, [composerFocused, body]);
+
+  useEffect(() => {
+    gazeFieldRef.current?.refresh();
+  }, [messages]);
+
+  // Live reactions. Own channel on purpose: if message_reactions isn't in the
+  // realtime publication yet (migration 035), only this channel is rejected,
+  // never the messages channel (see migration 015).
+  const messageIdsRef = useRef<Set<string>>(new Set());
+  const messagesRef = useRef<Message[]>([]);
+  useEffect(() => {
+    messagesRef.current = messages;
+    messageIdsRef.current = new Set(messages.map((m) => m.id));
+  }, [messages]);
+  const myId = myInfo?.id;
+  useEffect(() => {
+    if (!myId) return;
+    const supabase = createClient();
+    let refetchTimer: ReturnType<typeof setTimeout> | null = null;
+    const channel = supabase
+      .channel(`reactions:${threadId}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "message_reactions" },
+        (payload) => {
+          const row = (payload.new && "message_id" in payload.new ? payload.new : payload.old) as {
+            message_id?: string;
+            user_id?: string;
+            type?: string;
+          } | null;
+          if (!row?.message_id || !messageIdsRef.current.has(row.message_id)) return;
+          if (row.user_id === myId) return; // own reactions are optimistic already
+          if (payload.eventType === "INSERT" && row.type === "❤️") {
+            const target = messagesRef.current.find((m) => m.id === row.message_id);
+            if (target?.user_id === myId) flashMood(row.message_id, love, 2000);
+          }
+          // Coalesce bursts into one refetch of the thread's reaction counts.
+          if (refetchTimer) clearTimeout(refetchTimer);
+          refetchTimer = setTimeout(() => {
+            utils.messages.list.invalidate({ threadId });
+          }, 400);
+        },
+      )
+      .subscribe();
+    return () => {
+      if (refetchTimer) clearTimeout(refetchTimer);
+      supabase.removeChannel(channel);
+    };
+  }, [threadId, myId, flashMood, utils.messages.list]);
+
   useEffect(() => {
     const supabase = createClient();
     supabase.auth.getUser().then(async ({ data: { user } }) => {
@@ -2469,16 +2562,17 @@ export function ThreadDetail({
       // A peer can briefly hold multiple presence entries. Use the most recent
       // (highest `at`) so a later typing:false wins over a stale typing:true —
       // otherwise the indicator never clears.
-      const names = Object.entries(state)
+      // Presence is keyed by user id, which also seeds each typer's blobatar.
+      const typers = Object.entries(state)
         .filter(([uid]) => uid !== myInfo.id)
-        .map(([, presences]) => {
+        .map(([uid, presences]) => {
           const arr = presences as { display_name: string; typing: boolean; at?: number }[];
           if (arr.length === 0) return null;
-          return arr.reduce((a, b) => ((b.at ?? 0) >= (a.at ?? 0) ? b : a));
+          const latest = arr.reduce((a, b) => ((b.at ?? 0) >= (a.at ?? 0) ? b : a));
+          return latest.typing ? { id: uid, name: latest.display_name } : null;
         })
-        .filter((p): p is { display_name: string; typing: boolean; at?: number } => !!p && p.typing)
-        .map((p) => p.display_name);
-      setTypingUsers(names);
+        .filter((t): t is { id: string; name: string } => !!t);
+      setTypingUsers(typers);
     };
 
     channel
@@ -2882,6 +2976,7 @@ export function ThreadDetail({
     },
     onSuccess: (msg, _vars, ctx) => {
       const m = msg as unknown as Message;
+      flashMood(m.id, happy, 1200);
       setMessages((prev) => {
         if (ctx?.tempId && prev.some((x) => x.id === ctx.tempId)) {
           if (prev.some((x) => x.id === m.id)) {
@@ -3833,6 +3928,12 @@ export function ThreadDetail({
                         5 * 60_000;
                     const name = msg.profiles?.display_name ?? "Unknown";
                     const isOwnMessage = msg.user_id === myInfo?.id;
+                    const blobMood =
+                      msg.delivery_status === "sending"
+                        ? thinking
+                        : msg.delivery_status === "failed"
+                          ? sad
+                          : blobMoods[msg.id];
                     const isEditing = editingMessageId === msg.id;
                     const isLocalMessage = !!msg.delivery_status;
                     const failedEntry = msg.fail_id
@@ -3901,8 +4002,8 @@ export function ThreadDetail({
                         }}
                       >
                         {/* Avatar column */}
-                        <div className="w-7 flex-shrink-0">
-                          {!isSameAuthor && (
+                        <div className="relative w-7 flex-shrink-0">
+                          {(!isSameAuthor || blobMood) && (
                             <button
                               type="button"
                               onClick={() =>
@@ -3911,13 +4012,21 @@ export function ThreadDetail({
                                   name,
                                 })
                               }
-                              className="block text-left hover:opacity-80 transition-opacity"
+                              className={
+                                isSameAuthor
+                                  ? // Mood-only blob on a grouped row: small and
+                                    // out of flow so the row never jumps.
+                                    "absolute top-0 left-1 hover:opacity-80 transition-opacity"
+                                  : "block text-left hover:opacity-80 transition-opacity"
+                              }
                               title={`Open ${name}`}
                             >
                               <Avatar
                                 userId={msg.user_id}
                                 name={name}
+                                size={isSameAuthor ? 20 : 28}
                                 animate="hover"
+                                expression={blobMood}
                               />
                             </button>
                           )}
@@ -4907,6 +5016,8 @@ export function ThreadDetail({
               onChange={handleBodyChange}
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
+              onFocus={() => setComposerFocused(true)}
+              onBlur={() => setComposerFocused(false)}
               placeholder="message"
               rows={1}
               className="flex-1 min-h-[44px] md:min-h-[40px] max-h-[72px] border-none bg-transparent px-2.5 py-[10px] font-sans text-base md:text-[13.5px] leading-[1.45] text-ink placeholder:text-muted resize-none outline-none overflow-y-auto"
@@ -4944,11 +5055,28 @@ export function ThreadDetail({
 
         {/* Typing indicator */}
         {typingUsers.length > 0 && (
-          <p className="font-mono text-[10px] text-muted mt-1.5 h-3">
-            {typingUsers.length === 1
-              ? `${typingUsers[0]} is typing…`
-              : `${typingUsers.slice(0, -1).join(", ")} and ${typingUsers.at(-1)} are typing…`}
-          </p>
+          <div className="flex items-center gap-1.5 mt-1.5 h-5">
+            <div className="flex">
+              {typingUsers.slice(0, 3).map((t, i) => (
+                <Avatar
+                  key={t.id}
+                  userId={t.id}
+                  name={t.name}
+                  size={20}
+                  expression={thinking}
+                  className={i === 0 ? "" : "-ml-1.5"}
+                />
+              ))}
+            </div>
+            <p className="font-mono text-[10px] text-muted">
+              {typingUsers.length === 1
+                ? `${typingUsers[0].name} is typing…`
+                : `${typingUsers
+                    .slice(0, -1)
+                    .map((t) => t.name)
+                    .join(", ")} and ${typingUsers.at(-1)?.name} are typing…`}
+            </p>
+          </div>
         )}
 
         {/* Composer hint */}
