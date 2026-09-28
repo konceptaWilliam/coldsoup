@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from "react";
-import Image from "next/image";
+import { Avatar } from "./avatar";
 
 // useLayoutEffect on the client (positions scroll before paint), useEffect on
 // the server to avoid the SSR warning.
@@ -314,23 +314,12 @@ function PollView({
                       title={v.display_name}
                       className="flex items-center gap-1 border border-border px-1 py-0.5 sm:px-1"
                     >
-                      <div
-                        className="w-4 h-4 flex-shrink-0 overflow-hidden flex items-center justify-center font-mono text-[8px] font-semibold"
-                        style={{
-                          background: "hsl(180 30% 92%)",
-                          color: "hsl(180 40% 28%)",
-                        }}
-                      >
-                        {v.avatar_url ? (
-                          <img
-                            src={v.avatar_url}
-                            alt={v.display_name}
-                            className="w-full h-full object-cover"
-                          />
-                        ) : (
-                          v.display_name.slice(0, 1).toUpperCase()
-                        )}
-                      </div>
+                      <Avatar
+                        userId={v.id}
+                        name={v.display_name}
+                        avatarUrl={v.avatar_url}
+                        size={16}
+                      />
                       <span className="font-mono text-[10px] text-ink sm:hidden">
                         {v.display_name}
                       </span>
@@ -1263,66 +1252,6 @@ function useImagePress(onTap: () => void, onHold: () => void) {
   };
 }
 
-function Avatar({
-  name,
-  avatarUrl,
-  pulsing,
-  size = 28,
-  fontSize = 10,
-}: {
-  name: string;
-  avatarUrl?: string | null;
-  pulsing?: boolean;
-  size?: number;
-  fontSize?: number;
-}) {
-  const [imgError, setImgError] = useState(false);
-
-  const initials = name
-    .split(" ")
-    .map((n) => n[0])
-    .slice(0, 2)
-    .join("")
-    .toUpperCase();
-
-  const hue = name.split("").reduce((acc, c) => acc + c.charCodeAt(0), 0) % 360;
-
-  if (avatarUrl && !imgError) {
-    return (
-      <Image
-        src={avatarUrl}
-        alt={name}
-        width={size}
-        height={size}
-        className="rounded-sm object-cover flex-shrink-0"
-        style={{
-          width: size,
-          height: size,
-          animation: pulsing ? "breath 1.6s ease-out" : undefined,
-        }}
-        onError={() => setImgError(true)}
-      />
-    );
-  }
-
-  return (
-    <div
-      className="flex-shrink-0 flex items-center justify-center border border-border font-mono font-semibold"
-      style={{
-        width: size,
-        height: size,
-        fontSize,
-        background: `hsl(${hue} 30% 92%)`,
-        color: `hsl(${hue} 40% 28%)`,
-        animation: pulsing ? "breath 1.6s ease-out" : undefined,
-      }}
-      title={name}
-    >
-      {initials}
-    </div>
-  );
-}
-
 function formatLastSeen(iso: string): string {
   const diffMs = Date.now() - new Date(iso).getTime();
   const mins = Math.floor(diffMs / 60_000);
@@ -1367,7 +1296,13 @@ function ProfileCard({
           </button>
         </div>
         <div className="flex justify-center">
-          <Avatar name={target.name} avatarUrl={target.avatarUrl} size={96} fontSize={32} />
+          <Avatar
+            userId={target.id}
+            name={target.name}
+            avatarUrl={target.avatarUrl}
+            size={96}
+            animate="always"
+          />
         </div>
         <p className="mt-4 text-base font-semibold text-ink break-words">
           {target.name}
@@ -1705,8 +1640,10 @@ function ThreadDetailsPanel({
                 {creator ? (
                   <div className="flex items-center gap-2">
                     <Avatar
+                      userId={creator.id}
                       name={creator.display_name}
                       avatarUrl={creator.avatar_url}
+                      animate="hover"
                     />
                     <span className="text-sm text-ink">
                       {creator.display_name}
@@ -3984,8 +3921,10 @@ export function ThreadDetail({
                               title={`Open ${name}`}
                             >
                               <Avatar
+                                userId={msg.user_id}
                                 name={name}
                                 avatarUrl={msg.profiles?.avatar_url}
+                                animate="hover"
                               />
                             </button>
                           )}
@@ -4475,10 +4414,10 @@ export function ThreadDetail({
                                   title={`Seen by ${reader.name}`}
                                 >
                                   <Avatar
+                                    userId={reader.id}
                                     name={reader.name}
                                     avatarUrl={reader.avatarUrl}
                                     size={16}
-                                    fontSize={7}
                                   />
                                 </div>
                               ))}
