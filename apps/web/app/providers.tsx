@@ -13,6 +13,7 @@ const CACHE_BUSTER = "1";
 const WEEK = 1000 * 60 * 60 * 24 * 7;
 import { trpc } from "@/lib/trpc/client";
 import { createClient, setRealtimeAuth } from "@/lib/supabase/client";
+import { diagnosticFetch } from "@/lib/response-diagnostics";
 import { PresenceProvider } from "@/lib/presence-context";
 import { ThemeProvider } from "@/lib/theme-context";
 import { PwaManager } from "@/components/pwa-manager";
@@ -100,6 +101,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
         httpBatchLink({
           transformer: superjson,
           url: `${getBaseUrl()}/api/trpc`,
+          fetch: diagnosticFetch,
           headers() {
             return {
               "x-trpc-source": "react",
