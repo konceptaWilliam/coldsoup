@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import { trpc } from "@/lib/trpc/client";
 import { createClient } from "@/lib/supabase/client";
 import { StatusBadge } from "./status-badge";
+import { Avatar } from "./avatar";
 import { NewThreadDialog } from "./new-thread-dialog";
 import { GroupCalendar } from "./group-calendar";
 import { useUnread, getLastSeen, setLastSeen } from "@/lib/unread-context";
@@ -101,17 +102,8 @@ function formatDue(ymd: string): string {
   });
 }
 
-function MemberAvatar({ member }: { member: { display_name: string; avatar_url: string | null } }) {
-  return (
-    <div
-      className="w-5 h-5 flex-shrink-0 overflow-hidden flex items-center justify-center font-mono text-[8px] font-semibold"
-      style={{ background: "hsl(180 30% 92%)", color: "hsl(180 40% 28%)" }}
-    >
-      {member.avatar_url
-        ? <img src={member.avatar_url} alt={member.display_name} className="w-full h-full object-cover" />
-        : member.display_name.slice(0, 1).toUpperCase()}
-    </div>
-  );
+function MemberAvatar({ member }: { member: { id: string; display_name: string; avatar_url: string | null } }) {
+  return <Avatar userId={member.id} name={member.display_name} avatarUrl={member.avatar_url} size={20} />;
 }
 
 function BellOffIcon({ className = "" }: { className?: string }) {

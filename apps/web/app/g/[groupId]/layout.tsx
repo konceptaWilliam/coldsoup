@@ -49,6 +49,7 @@ export default async function GroupLayout({
         <div className="h-screen-dynamic flex overflow-hidden bg-surface">
           <Sidebar
             groups={groups}
+            userId={profile.id}
             userDisplayName={profile.display_name}
             avatarUrl={profile.avatar_url ?? null}
           />
