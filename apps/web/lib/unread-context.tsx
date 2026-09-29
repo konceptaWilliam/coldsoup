@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useState, useCallback } from "react";
+import { createContext, useCallback, useContext, useMemo, useRef, useState } from "react";
 
 const LS_PREFIX = "coldsoup:lastSeen:";
 
@@ -18,85 +18,91 @@ export function setLastSeen(threadId: string, ts: number) {
   } catch {}
 }
 
-type UnreadContextType = {
+type UnreadData = {
   // threadId -> unread count
   threadCounts: Record<string, number>;
   // groupId -> total unread count
   groupCounts: Record<string, number>;
   // groupId -> urgent unread count
   groupUrgentCounts: Record<string, number>;
+};
+
+type UnreadActions = {
   setThreadCount: (threadId: string, groupId: string, count: number, isUrgent?: boolean) => void;
   markRead: (threadId: string, groupId: string) => void;
 };
 
-const UnreadContext = createContext<UnreadContextType>({
+const UnreadDataContext = createContext<UnreadData>({
   threadCounts: {},
   groupCounts: {},
   groupUrgentCounts: {},
+});
+
+const UnreadActionsContext = createContext<UnreadActions>({
   setThreadCount: () => {},
   markRead: () => {},
 });
 
 export function UnreadProvider({ children }: { children: React.ReactNode }) {
   const [threadCounts, setThreadCounts] = useState<Record<string, number>>({});
-  const [threadIsUrgent, setThreadIsUrgent] = useState<Record<string, boolean>>({});
   const [groupCounts, setGroupCounts] = useState<Record<string, number>>({});
   const [groupUrgentCounts, setGroupUrgentCounts] = useState<Record<string, number>>({});
+  // Latest per-thread values, readable from stable callbacks.
+  const countsRef = useRef<Record<string, number>>({});
+  const urgentRef = useRef<Record<string, boolean>>({});
 
   const setThreadCount = useCallback(
     (threadId: string, groupId: string, count: number, isUrgent = false) => {
-      const oldCount = threadCounts[threadId] ?? 0;
-      const wasUrgent = threadIsUrgent[threadId] ?? false;
-
-      setThreadCounts((prev) => {
-        if (prev[threadId] === count) return prev;
-        return { ...prev, [threadId]: count };
-      });
-      setThreadIsUrgent((prev) => {
-        if (prev[threadId] === isUrgent) return prev;
-        return { ...prev, [threadId]: isUrgent };
-      });
-      setGroupCounts((prev) => {
-        const delta = count - oldCount;
-        if (delta === 0) return prev;
-        return { ...prev, [groupId]: Math.max(0, (prev[groupId] ?? 0) + delta) };
-      });
-      setGroupUrgentCounts((prev) => {
-        const oldUrgent = wasUrgent ? oldCount : 0;
-        const newUrgent = isUrgent ? count : 0;
-        const delta = newUrgent - oldUrgent;
-        if (delta === 0) return prev;
-        return { ...prev, [groupId]: Math.max(0, (prev[groupId] ?? 0) + delta) };
-      });
+      const oldCount = countsRef.current[threadId] ?? 0;
+      const wasUrgent = urgentRef.current[threadId] ?? false;
+      if (oldCount === count && wasUrgent === isUrgent) return;
+      countsRef.current = { ...countsRef.current, [threadId]: count };
+      urgentRef.current = { ...urgentRef.current, [threadId]: isUrgent };
+      setThreadCounts(countsRef.current);
+      const delta = count - oldCount;
+      if (delta !== 0) {
+        setGroupCounts((prev) => ({ ...prev, [groupId]: Math.max(0, (prev[groupId] ?? 0) + delta) }));
+      }
+      const urgentDelta = (isUrgent ? count : 0) - (wasUrgent ? oldCount : 0);
+      if (urgentDelta !== 0) {
+        setGroupUrgentCounts((prev) => ({ ...prev, [groupId]: Math.max(0, (prev[groupId] ?? 0) + urgentDelta) }));
+      }
     },
-    [threadCounts, threadIsUrgent]
+    [],
   );
 
   const markRead = useCallback((threadId: string, groupId: string) => {
     setLastSeen(threadId, Date.now());
-    const threadCount = threadCounts[threadId] ?? 0;
-    const wasUrgent = threadIsUrgent[threadId] ?? false;
-    setThreadCounts((prev) => {
-      if (!prev[threadId]) return prev;
-      return { ...prev, [threadId]: 0 };
-    });
-    setGroupCounts((prev) => {
-      return { ...prev, [groupId]: Math.max(0, (prev[groupId] ?? 0) - threadCount) };
-    });
-    if (wasUrgent && threadCount > 0) {
-      setGroupUrgentCounts((prev) => {
-        return { ...prev, [groupId]: Math.max(0, (prev[groupId] ?? 0) - threadCount) };
-      });
+    const count = countsRef.current[threadId] ?? 0;
+    if (count === 0) return;
+    const wasUrgent = urgentRef.current[threadId] ?? false;
+    countsRef.current = { ...countsRef.current, [threadId]: 0 };
+    setThreadCounts(countsRef.current);
+    setGroupCounts((prev) => ({ ...prev, [groupId]: Math.max(0, (prev[groupId] ?? 0) - count) }));
+    if (wasUrgent) {
+      setGroupUrgentCounts((prev) => ({ ...prev, [groupId]: Math.max(0, (prev[groupId] ?? 0) - count) }));
     }
-  }, [threadCounts, threadIsUrgent]);
+  }, []);
+
+  const data = useMemo(
+    () => ({ threadCounts, groupCounts, groupUrgentCounts }),
+    [threadCounts, groupCounts, groupUrgentCounts],
+  );
+  const actions = useMemo(() => ({ setThreadCount, markRead }), [setThreadCount, markRead]);
 
   return (
-    <UnreadContext.Provider value={{ threadCounts, groupCounts, groupUrgentCounts, setThreadCount, markRead }}>
-      {children}
-    </UnreadContext.Provider>
+    <UnreadActionsContext.Provider value={actions}>
+      <UnreadDataContext.Provider value={data}>{children}</UnreadDataContext.Provider>
+    </UnreadActionsContext.Provider>
   );
 }
 
+/** Counts + actions (re-renders on count changes). */
 export function useUnread() {
-  return useContext(UnreadContext);
+  return { ...useContext(UnreadDataContext), ...useContext(UnreadActionsContext) };
+}
+
+/** Actions only — never re-renders on count changes. */
+export function useUnreadActions() {
+  return useContext(UnreadActionsContext);
 }

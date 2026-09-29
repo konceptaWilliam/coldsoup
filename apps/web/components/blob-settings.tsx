@@ -11,13 +11,10 @@ import {
   rerollPool,
   rerollProgress,
   rerollReady,
-  type Form,
 } from "@/lib/blob-evolution";
 import { baseShapeOf } from "@/lib/blob-base";
 import { BlobForm } from "@/components/blob-form";
 import { EvolveModal, rerollSpec, type RevealSpec } from "@/components/evolve-modal";
-
-const UNLOCK: Record<Form, string> = { 1: "", 2: "50 msgs", 3: "500 msgs" };
 
 export function BlobSettings({ userId }: { userId: string }) {
   const utils = trpc.useUtils();
@@ -71,7 +68,7 @@ export function BlobSettings({ userId }: { userId: string }) {
                   {locked ? "???" : `${look.shape ?? base}${shiny ? " ✦ shiny" : ""}`}
                 </span>
                 <span className="font-mono text-[10px] text-muted min-h-[14px]">
-                  {locked ? UNLOCK[f] : me.form === f ? "Equipped" : ""}
+                  {locked ? "Locked" : me.form === f ? "Equipped" : ""}
                 </span>
               </button>
             );

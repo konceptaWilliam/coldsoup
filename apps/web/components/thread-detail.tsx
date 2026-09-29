@@ -14,292 +14,44 @@ import { SWIPE_EDGE_PX } from "@/lib/swipe";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import { trpc } from "@/lib/trpc/client";
 import { createClient, getPresenceClient } from "@/lib/supabase/client";
-import { useUnread } from "@/lib/unread-context";
+import { useUnreadActions } from "@/lib/unread-context";
 import { useOnline } from "@/lib/presence-context";
-import { validateFile } from "@/lib/file-utils";
 import { haptic } from "@/lib/haptics";
 import { playSend, playReceive } from "@/lib/sound";
-import { SMeterCard, SMeterCreateModal, SMeterResultsLink, type SMeterSummary } from "@/components/smeter";
-import { systemEventText, type SystemEvent } from "@/lib/system-event";
+import { SMeterCreateModal, type SMeterSummary } from "@/components/smeter";
 import { useBlob } from "@/lib/use-blob";
-import { BlobForm } from "@/components/blob-form";
 import { BlobLevel } from "@/components/blob-level";
 import { EvolveModal, evolveSpec, type RevealSpec } from "@/components/evolve-modal";
-import { isShape } from "@/lib/blob-evolution";
 import {
   REACTION_DEFAULTS,
-  REACTION_TYPES,
   type Attachment,
   type Message,
-  type PollData,
   type ReplyTo,
   type ThreadStatus,
 } from "@/lib/thread-types";
 import { useThreadMessages } from "@/lib/use-thread-messages";
 import { flatten } from "@/lib/thread-cache";
-import { localPreview } from "@/lib/local-previews";
-
-// Message context needed to start a reply from an image (lightbox / hold menu).
-// The specific image url is supplied at reply time (the lightbox can swipe to a
-// different image than the one originally opened).
-type ReplyTarget = {
-  id: string;
-  body: string;
-  authorName: string;
-};
+import { formatTime, SystemMessage } from "@/components/thread/message-parts";
+import { buildMentionMatcher, mentionsUser, MENTION_SPECIALS } from "@/lib/mentions";
+import { MessageRow, type ReplyTarget, type RowActions } from "@/components/thread/message-row";
+import { useStableActions } from "@/lib/use-stable-actions";
+import { Composer, type ComposerHandle } from "@/components/thread/composer";
+import { EMPTY_READERS } from "@/lib/row-props-equal";
 
 type ProfileTarget = {
   id: string | null;
   name: string;
 };
 
-const DRAFT_PREFIX = "coldsoup:draft:";
 const BOTTOM_THRESHOLD_PX = 120;
+// Stable empty defaults so memos keyed on them don't recompute every render.
+const EMPTY_MEMBERS: { id: string; display_name: string; avatar_url: string | null; role: string }[] = [];
+const EMPTY_RECEIPTS: never[] = [];
 
 function isScrolledNearBottom(container: HTMLElement): boolean {
   return (
     container.scrollHeight - container.scrollTop - container.clientHeight <=
     BOTTOM_THRESHOLD_PX
-  );
-}
-
-function draftKey(threadId: string) {
-  return `${DRAFT_PREFIX}${threadId}`;
-}
-
-function readDraft(threadId: string): string {
-  try {
-    return localStorage.getItem(draftKey(threadId)) ?? "";
-  } catch {
-    return "";
-  }
-}
-
-function writeDraft(threadId: string, value: string) {
-  try {
-    if (value.trim()) localStorage.setItem(draftKey(threadId), value);
-    else localStorage.removeItem(draftKey(threadId));
-  } catch {}
-}
-
-function clearDraft(threadId: string) {
-  try {
-    localStorage.removeItem(draftKey(threadId));
-  } catch {}
-}
-
-// Centered grey thread-event notice (no author bubble).
-function SystemMessage({ event, threadId }: { event: SystemEvent; threadId: string }) {
-  if (event.kind === "blob_evolved") {
-    const shiny = event.shiny;
-    return (
-      <div className="flex justify-center my-3 px-4">
-        <span
-          className={`inline-flex items-center gap-2 border px-2 py-1 font-mono text-[11px] leading-relaxed max-w-[85%] ${
-            shiny ? "border-accent text-ink bg-accent-light" : "border-dashed border-border-strong text-muted"
-          }`}
-        >
-          <BlobForm
-            name={event.userId}
-            look={{
-              shape: isShape(event.shape) ? event.shape : null,
-              finish: shiny ? "shiny" : event.level === 3 ? "holo" : "plain",
-            }}
-            size={22}
-          />
-          {systemEventText(event)}
-        </span>
-      </div>
-    );
-  }
-  return (
-    <div className="flex justify-center my-3 px-4">
-      <span className="font-mono text-[11px] text-muted text-center leading-relaxed max-w-[85%]">
-        {event.kind === "smeter_done" ? (
-          <>
-            The {event.smeterTitle ?? "S-meter"} s-meter is done.{" "}
-            <SMeterResultsLink smeterId={event.smeterId} threadId={threadId} />
-          </>
-        ) : (
-          systemEventText(event)
-        )}
-      </span>
-    </div>
-  );
-}
-
-function PollView({
-  poll: initialPoll,
-  myInfo,
-}: {
-  poll: PollData;
-  myInfo: {
-    id: string;
-    display_name: string;
-    avatar_url: string | null;
-  } | null;
-}) {
-  const [poll, setPoll] = useState(initialPoll);
-  const [newOptionText, setNewOptionText] = useState("");
-  const [showAddOption, setShowAddOption] = useState(false);
-
-  // Sync local state when the cached poll is patched (realtime refresh)
-  useEffect(() => {
-    setPoll(initialPoll);
-  }, [initialPoll]);
-
-  const vote = trpc.polls.vote.useMutation({
-    onMutate: ({ pollOptionId }) => {
-      const prev = poll;
-      setPoll((p) => ({
-        ...p,
-        options: p.options.map((o) =>
-          o.id !== pollOptionId
-            ? o
-            : {
-                ...o,
-                user_voted: !o.user_voted,
-                vote_count: o.user_voted ? o.vote_count - 1 : o.vote_count + 1,
-                voters: o.user_voted
-                  ? o.voters.filter((v) => v.id !== myInfo?.id)
-                  : myInfo
-                    ? [
-                        ...o.voters,
-                        {
-                          id: myInfo.id,
-                          display_name: myInfo.display_name,
-                          avatar_url: myInfo.avatar_url,
-                        },
-                      ]
-                    : o.voters,
-              },
-        ),
-      }));
-      return { prev };
-    },
-    onError: (_, __, ctx) => {
-      if (ctx?.prev) setPoll(ctx.prev);
-    },
-  });
-
-  const addOption = trpc.polls.addOption.useMutation({
-    onSuccess: () => {
-      setNewOptionText("");
-      setShowAddOption(false);
-    },
-  });
-
-  const totalVotes = poll.options.reduce((s, o) => s + o.vote_count, 0);
-
-  return (
-    <div className="mt-1 border border-border bg-surface p-3 w-full sm:max-w-[360px] shadow-lg">
-      <p className="font-mono text-[12px] font-semibold text-ink mb-1">
-        {poll.question}
-      </p>
-      <p className="font-mono text-[10px] text-muted mb-2">
-        {totalVotes} vote{totalVotes !== 1 ? "s" : ""}
-      </p>
-      <div className="space-y-2">
-        {poll.options.map((opt) => {
-          const pct =
-            totalVotes > 0
-              ? Math.round((opt.vote_count / totalVotes) * 100)
-              : 0;
-          return (
-            <div key={opt.id}>
-              <button
-                className="w-full text-left"
-                onClick={() => vote.mutate({ pollOptionId: opt.id })}
-              >
-                <div className="flex items-center justify-between mb-0.5">
-                  <span
-                    className={`font-mono text-[11px] ${opt.user_voted ? "text-ink font-semibold" : "text-ink"}`}
-                  >
-                    {opt.text}
-                  </span>
-                  <span className="font-mono text-[10px] text-muted ml-2 flex-shrink-0">
-                    {pct}%
-                  </span>
-                </div>
-                <div className="h-1 bg-surface-2 border border-border mb-1">
-                  <div
-                    className={`h-full ${opt.user_voted ? "bg-pastel" : "bg-pastel/60"}`}
-                    style={{ width: `${pct}%` }}
-                  />
-                </div>
-              </button>
-              {opt.voters.length > 0 ? (
-                <div className="flex flex-wrap gap-0.5">
-                  {opt.voters.map((v) => (
-                    <div
-                      key={v.id}
-                      title={v.display_name}
-                      className="flex items-center gap-1 border border-border px-1 py-0.5 sm:px-1"
-                    >
-                      <Avatar
-                        userId={v.id}
-                        name={v.display_name}
-                        size={16}
-                      />
-                      <span className="font-mono text-[10px] text-ink sm:hidden">
-                        {v.display_name}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <span className="font-mono text-[10px] text-muted-2">
-                  No votes
-                </span>
-              )}
-            </div>
-          );
-        })}
-      </div>
-      {showAddOption ? (
-        <form
-          className="flex gap-1.5 mt-3"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (!newOptionText.trim()) return;
-            addOption.mutate({ pollId: poll.id, text: newOptionText.trim() });
-          }}
-        >
-          <input
-            autoFocus
-            value={newOptionText}
-            onChange={(e) => setNewOptionText(e.target.value)}
-            maxLength={200}
-            placeholder="Option text…"
-            className="flex-1 border border-border bg-surface px-2 py-1 font-mono text-[12px] text-ink placeholder:text-muted focus:outline-none focus:border-ink"
-          />
-          <button
-            type="submit"
-            disabled={!newOptionText.trim() || addOption.isPending}
-            className="font-mono text-[10px] bg-ink text-surface px-2 py-1 disabled:opacity-40"
-          >
-            Add
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setShowAddOption(false);
-              setNewOptionText("");
-            }}
-            className="font-mono text-[10px] text-muted hover:text-ink px-1"
-          >
-            ×
-          </button>
-        </form>
-      ) : (
-        <button
-          onClick={() => setShowAddOption(true)}
-          className="mt-3 font-mono text-[10px] text-muted hover:text-ink transition-colors"
-        >
-          + add option
-        </button>
-      )}
-    </div>
   );
 }
 
@@ -418,14 +170,6 @@ function PollCreateModal({
   );
 }
 
-function formatTime(dateStr: string): string {
-  return new Date(dateStr).toLocaleTimeString("en-GB", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  });
-}
-
 function formatDate(dateStr: string): string {
   const d = new Date(dateStr);
   const today = new Date();
@@ -441,108 +185,9 @@ function formatDate(dateStr: string): string {
   });
 }
 
-const MENTION_SPECIALS = ["everyone", "here"];
-
 // Distinct haptic for an incoming @mention — a double pulse, clearly different
 // from the single `light` tap fired on send.
 const MENTION_HAPTIC: VibratePattern = [12, 30, 12];
-
-// True when `body` mentions this user by name, or via @everyone / @here.
-function mentionsUser(body: string, displayName: string): boolean {
-  if (!body) return false;
-  if (new RegExp(`@(${MENTION_SPECIALS.join("|")})(?!\\w)`).test(body)) return true;
-  const escaped = displayName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`@${escaped}(?!\\w)`).test(body);
-}
-
-const URL_RE = /https?:\/\/[^\s<]+/g;
-
-// Split a plain-text run into text + clickable <a> nodes for any http(s) URLs.
-// `keyBase` must be unique per run so the returned nodes get stable sibling keys.
-function linkify(text: string, keyBase: number): React.ReactNode[] {
-  const nodes: React.ReactNode[] = [];
-  let last = 0;
-  let i = 0;
-  let m: RegExpExecArray | null;
-  URL_RE.lastIndex = 0;
-  while ((m = URL_RE.exec(text)) !== null) {
-    let url = m[0];
-    // Don't let trailing sentence punctuation get pulled into the href.
-    const trail = url.match(/[.,!?;:)\]]+$/);
-    const trailing = trail ? trail[0] : "";
-    if (trailing) url = url.slice(0, url.length - trailing.length);
-    if (m.index > last) {
-      nodes.push(<span key={`${keyBase}-t${i++}`}>{text.slice(last, m.index)}</span>);
-    }
-    nodes.push(
-      <a
-        key={`${keyBase}-l${i++}`}
-        href={url}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="underline text-ink hover:opacity-70 break-all"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {url}
-      </a>,
-    );
-    if (trailing) {
-      nodes.push(<span key={`${keyBase}-p${i++}`}>{trailing}</span>);
-    }
-    last = m.index + m[0].length;
-  }
-  if (last < text.length) {
-    nodes.push(<span key={`${keyBase}-t${i++}`}>{text.slice(last)}</span>);
-  }
-  return nodes;
-}
-
-function renderBody(
-  body: string,
-  members: { id: string; display_name: string }[],
-  myId: string,
-): React.ReactNode {
-  if (!body) return body;
-
-  const sorted = [...members].sort(
-    (a, b) => b.display_name.length - a.display_name.length,
-  );
-  const escaped = sorted.map((m) =>
-    m.display_name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
-  );
-  const regex = new RegExp(`@(${[...escaped, ...MENTION_SPECIALS].join("|")})`, "g");
-
-  const parts: React.ReactNode[] = [];
-  let lastIndex = 0;
-  let match;
-  let key = 0;
-
-  regex.lastIndex = 0;
-  while ((match = regex.exec(body)) !== null) {
-    if (match.index > lastIndex) {
-      parts.push(...linkify(body.slice(lastIndex, match.index), key++));
-    }
-    const member = members.find((m) => m.display_name === match![1]);
-    const isMe = member?.id === myId;
-    parts.push(
-      <span
-        key={key++}
-        className={`font-semibold px-0.5 rounded-sm ${
-          isMe ? "bg-pastel-tint text-pastel-ink" : "bg-surface-2 text-ink"
-        }`}
-      >
-        @{match[1]}
-      </span>,
-    );
-    lastIndex = match.index + match[0].length;
-  }
-
-  if (lastIndex < body.length) {
-    parts.push(...linkify(body.slice(lastIndex), key++));
-  }
-
-  return parts.length ? <>{parts}</> : body;
-}
 
 // Download an attachment (or share it via the Web Share API on mobile when
 // available). Falls back to opening the URL in a new tab on failure.
@@ -1035,144 +680,6 @@ function ImageLightbox({
   );
 }
 
-// A single sent image, rendered clean (no frame/caption). Tap → open the
-// zoomable lightbox; hold / right-click → open the actions menu.
-function ThreadImage({
-  att,
-  onOpen,
-  onHold,
-}: {
-  att: Attachment;
-  onOpen: () => void;
-  onHold: () => void;
-}) {
-  const press = useImagePress(onOpen, onHold);
-  return (
-    <button
-      {...press}
-      className="block overflow-hidden border border-border bg-surface-2 transition-opacity duration-150 hover:opacity-90"
-      style={{ maxWidth: 272, lineHeight: 0 }}
-    >
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src={localPreview(att.url) ?? att.url}
-        alt={att.name}
-        draggable={false}
-        className="block h-auto w-full"
-        style={{ maxHeight: 360, objectFit: "cover" }}
-        loading="lazy"
-      />
-    </button>
-  );
-}
-
-// A single staged (not-yet-sent) file in the composer. Images render as a
-// thumbnail tile with a remove button; other files fall back to a name chip.
-function PendingPreview({
-  file,
-  onRemove,
-}: {
-  file: File;
-  onRemove: () => void;
-}) {
-  const isImage = file.type.startsWith("image/");
-  const [url, setUrl] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!isImage) return;
-    const u = URL.createObjectURL(file);
-    setUrl(u);
-    return () => URL.revokeObjectURL(u);
-  }, [file, isImage]);
-
-  if (isImage && url) {
-    return (
-      <div className="relative h-16 w-16 overflow-hidden border border-border bg-surface-2">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src={url}
-          alt={file.name}
-          className="h-full w-full object-cover"
-        />
-        <button
-          onClick={onRemove}
-          aria-label={`Remove ${file.name}`}
-          className="absolute top-0.5 right-0.5 flex h-5 w-5 items-center justify-center bg-ink/70 text-surface text-sm leading-none hover:bg-ink transition-colors"
-        >
-          ×
-        </button>
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex h-16 items-center gap-1.5 border border-border bg-surface-2 px-2 text-xs text-ink">
-      <span className="max-w-[120px] truncate font-mono">{file.name}</span>
-      <button
-        onClick={onRemove}
-        aria-label={`Remove ${file.name}`}
-        className="ml-0.5 text-muted hover:text-ink transition-colors"
-      >
-        ×
-      </button>
-    </div>
-  );
-}
-
-// Tap vs. hold discrimination for images. A plain tap/click fires onTap; a
-// 500ms hold or a right-click fires onHold (and suppresses the following tap).
-// stopPropagation keeps the press off the message row's own long-press/menu.
-function useImagePress(onTap: () => void, onHold: () => void) {
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const start = useRef<{ x: number; y: number } | null>(null);
-  const held = useRef(false);
-
-  const clear = () => {
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = null;
-    start.current = null;
-  };
-
-  return {
-    onPointerDown: (e: React.PointerEvent) => {
-      e.stopPropagation();
-      held.current = false;
-      start.current = { x: e.clientX, y: e.clientY };
-      if (timer.current) clearTimeout(timer.current);
-      timer.current = setTimeout(() => {
-        held.current = true;
-        timer.current = null;
-        onHold();
-      }, 500);
-    },
-    onPointerMove: (e: React.PointerEvent) => {
-      const s = start.current;
-      if (!s) return;
-      if (Math.abs(e.clientX - s.x) > 10 || Math.abs(e.clientY - s.y) > 10) {
-        clear();
-      }
-    },
-    onPointerUp: () => clear(),
-    onPointerLeave: () => clear(),
-    onClick: (e: React.MouseEvent) => {
-      if (held.current) {
-        e.preventDefault();
-        e.stopPropagation();
-        held.current = false;
-        return;
-      }
-      onTap();
-    },
-    onContextMenu: (e: React.MouseEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-      clear();
-      held.current = true;
-      onHold();
-    },
-  };
-}
-
 function formatLastSeen(iso: string): string {
   const diffMs = Date.now() - new Date(iso).getTime();
   const mins = Math.floor(diffMs / 60_000);
@@ -1240,153 +747,6 @@ function ProfileCard({
           </p>
         ) : null}
       </div>
-    </div>
-  );
-}
-
-function LinkPreview({ url }: { url: string }) {
-  const { data } = trpc.links.unfurl.useQuery(
-    { url },
-    { staleTime: 60 * 60 * 1000, retry: false },
-  );
-  if (!data || !data.title) return null;
-  let domain = "";
-  try { domain = new URL(url).hostname.replace(/^www\./, ""); } catch { /* ignore */ }
-  return (
-    <a
-      href={url}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="block mt-2 max-w-sm border border-border bg-surface-2 hover:border-pastel-deep transition-colors overflow-hidden"
-    >
-      {data.image_url && (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img src={data.image_url} alt="" className="w-full h-36 object-cover" />
-      )}
-      <div className="p-2">
-        <p className="text-[13px] font-semibold text-ink line-clamp-2">{data.title}</p>
-        {data.description && (
-          <p className="text-[11px] text-muted line-clamp-2 mt-0.5">{data.description}</p>
-        )}
-        <p className="font-mono text-[10px] text-muted-2 mt-1 truncate">{domain}</p>
-      </div>
-    </a>
-  );
-}
-
-// One cell in the multi-image mosaic. Tap → lightbox; hold/right-click → actions.
-function GridTile({
-  att,
-  onOpen,
-  onHold,
-  overlay,
-  style,
-}: {
-  att: Attachment;
-  onOpen: (att: Attachment) => void;
-  onHold: (att: Attachment) => void;
-  overlay?: number;
-  style?: React.CSSProperties;
-}) {
-  const press = useImagePress(() => onOpen(att), () => onHold(att));
-  return (
-    <button
-      {...press}
-      title={att.name}
-      className="relative block w-full h-full overflow-hidden bg-surface-2 focus:outline-none"
-      style={style}
-    >
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src={att.url}
-        alt={att.name}
-        draggable={false}
-        loading="lazy"
-        className="w-full h-full object-cover block"
-      />
-      {overlay != null && overlay > 0 && (
-        <span className="absolute inset-0 flex items-center justify-center bg-ink/55 text-surface font-mono text-lg font-semibold pointer-events-none select-none">
-          +{overlay}
-        </span>
-      )}
-    </button>
-  );
-}
-
-// Messenger-style image mosaic for messages with 2+ images. Tidy grid, no
-// hover-fan / drag — tap any tile to open the lightbox.
-function ImageGallery({
-  attachments,
-  onOpen,
-  onHold,
-}: {
-  attachments: Attachment[];
-  onOpen: (att: Attachment) => void;
-  onHold: (att: Attachment) => void;
-}) {
-  const n = attachments.length;
-  const shown = attachments.slice(0, 4);
-  const extra = n - shown.length;
-  const MAX_W = 272;
-
-  if (n === 2) {
-    return (
-      <div
-        className="grid gap-[2px] overflow-hidden"
-        style={{ width: MAX_W, gridTemplateColumns: "1fr 1fr" }}
-      >
-        {shown.map((att, i) => (
-          <GridTile
-            key={i}
-            att={att}
-            onOpen={onOpen}
-            onHold={onHold}
-            style={{ aspectRatio: "1 / 1" }}
-          />
-        ))}
-      </div>
-    );
-  }
-
-  if (n === 3) {
-    return (
-      <div
-        className="grid gap-[2px] overflow-hidden"
-        style={{
-          width: MAX_W,
-          height: 180,
-          gridTemplateColumns: "1fr 1fr",
-          gridTemplateRows: "1fr 1fr",
-        }}
-      >
-        <GridTile
-          att={shown[0]}
-          onOpen={onOpen}
-          onHold={onHold}
-          style={{ gridRow: "1 / span 2" }}
-        />
-        <GridTile att={shown[1]} onOpen={onOpen} onHold={onHold} />
-        <GridTile att={shown[2]} onOpen={onOpen} onHold={onHold} />
-      </div>
-    );
-  }
-
-  // n >= 4: 2×2 grid, last tile shows "+N" overlay when more images exist.
-  return (
-    <div
-      className="grid gap-[2px] overflow-hidden"
-      style={{ width: MAX_W, gridTemplateColumns: "1fr 1fr" }}
-    >
-      {shown.map((att, i) => (
-        <GridTile
-          key={i}
-          att={att}
-          onOpen={onOpen}
-          onHold={onHold}
-          overlay={i === 3 ? extra : undefined}
-          style={{ aspectRatio: "1 / 1" }}
-        />
-      ))}
     </div>
   );
 }
@@ -1787,6 +1147,10 @@ function StatusControl({
   );
 }
 
+// Swipe-right-to-reply distances.
+const SWIPE_MAX = 72;
+const SWIPE_TRIGGER = 48;
+
 export function ThreadDetail({
   threadId,
   groupId,
@@ -1805,10 +1169,6 @@ export function ThreadDetail({
   // Row keys that should play the enter animation: messages that arrive while
   // the thread is open (realtime or sent here). Everything else renders still.
   const animateKeys = useRef<Set<string>>(new Set());
-  const [body, setBody] = useState("");
-  // True while the soft keyboard is up — used to drop the composer's safe-area
-  // bottom padding (otherwise it leaves a gap between the input and keyboard).
-  const [keyboardOpen, setKeyboardOpen] = useState(false);
   const [typingUsers, setTypingUsers] = useState<{ id: string; name: string }[]>([]);
   // Short-lived blobatar poses keyed by message id (happy on delivery, love
   // when someone hearts your message).
@@ -1824,7 +1184,6 @@ export function ThreadDetail({
       });
     }, ms);
   }, []);
-  const [composerFocused, setComposerFocused] = useState(false);
   // Provided by the shell (server-fetched once per app load) — no auth or
   // profile round trip before realtime channels and own-message UI work.
   const myInfo = me;
@@ -1867,14 +1226,6 @@ export function ThreadDetail({
     setThreadStatus(threadMeta.status as ThreadStatus);
   }, [threadMeta?.title, threadMeta?.status]); // eslint-disable-line react-hooks/exhaustive-deps
   const [showDetails, setShowDetails] = useState(false);
-  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
-  const [isRecording, setIsRecording] = useState(false);
-  const [recordSeconds, setRecordSeconds] = useState(0);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const recordChunksRef = useRef<Blob[]>([]);
-  const recordTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const recordStreamRef = useRef<MediaStream | null>(null);
-  const [uploadError, setUploadError] = useState<string | null>(null);
   const [activeLightbox, setActiveLightbox] = useState<{
     images: Attachment[];
     index: number;
@@ -1886,8 +1237,6 @@ export function ThreadDetail({
   } | null>(null);
   const [activeTooltip, setActiveTooltip] = useState<string | null>(null);
   const tooltipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [attachMenuOpen, setAttachMenuOpen] = useState(false);
   const [showPollCreate, setShowPollCreate] = useState(false);
   const [showSMeterCreate, setShowSMeterCreate] = useState(false);
   const [profileTarget, setProfileTarget] = useState<ProfileTarget | null>(null);
@@ -1899,6 +1248,8 @@ export function ThreadDetail({
   const [hasNewMessages, setHasNewMessages] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const composerApi = useRef<ComposerHandle>(null);
+  const listContentRef = useRef<HTMLDivElement>(null);
   const prevMsgCountRef = useRef(0);
   const prevLatestMessageIdRef = useRef<string | null>(null);
   const handledHighlightRef = useRef<string | null>(null);
@@ -1939,33 +1290,18 @@ export function ThreadDetail({
     locked: number;
     el: HTMLElement;
   } | null>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const composerRef = useRef<HTMLDivElement>(null);
-  const composerTouchYRef = useRef<number | null>(null);
   const utils = trpc.useUtils();
-  const { markRead } = useUnread();
+  const { markRead } = useUnreadActions();
   const [reveal, setReveal] = useState<RevealSpec | null>(null);
   const myBlob = useBlob(myInfo?.id);
   const setBlobForm = trpc.profile.setBlobForm.useMutation({
     onSuccess: () => utils.profile.blobs.invalidate(),
   });
 
-  // Reply state
-  const [replyingTo, setReplyingTo] = useState<{
-    id: string;
-    body: string;
-    authorName: string;
-    imageUrl: string | null;
-  } | null>(null);
-
   // Edit state
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editBody, setEditBody] = useState("");
 
-  // @mention state
-  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
-  const [mentionIndex, setMentionIndex] = useState(0);
 
   const markReadServer = trpc.threads.markRead.useMutation({
     onSuccess: (res) => {
@@ -1981,7 +1317,7 @@ export function ThreadDetail({
     onError: () => setThreadStatus("DONE"),
     onSettled: () => utils.threads.list.invalidate({ groupId }),
   });
-  const { data: readReceipts = [] } = trpc.threads.reads.useQuery(
+  const { data: readReceipts = EMPTY_RECEIPTS } = trpc.threads.reads.useQuery(
     { threadId },
     { enabled: !!threadId },
   );
@@ -2033,6 +1369,21 @@ export function ThreadDetail({
     preLoadScrollHeight.current = null;
   }, [thread.pageCount]);
 
+  // Keep the newest message in view while content above it grows (images,
+  // link previews, polls loading) — only when the user is at the bottom.
+  const listVisible = !(thread.isLoading && messages.length === 0);
+  useEffect(() => {
+    const root = scrollContainerRef.current;
+    const content = listContentRef.current;
+    if (!root || !content || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => {
+      if (!isNearBottomRef.current || userScrollingRef.current) return;
+      root.scrollTop = root.scrollHeight;
+    });
+    ro.observe(content);
+    return () => ro.disconnect();
+  }, [listVisible]);
+
   const updateScrollState = useCallback(() => {
     const container = scrollContainerRef.current;
     if (!container) return;
@@ -2052,9 +1403,9 @@ export function ThreadDetail({
       Date.now() >= suppressKbDismissRef.current &&
       typeof window !== "undefined" &&
       window.matchMedia("(pointer: coarse)").matches &&
-      document.activeElement === textareaRef.current
+      composerApi.current?.isFocused()
     ) {
-      textareaRef.current?.blur();
+      composerApi.current?.blur();
     }
 
     const isNearBottom = isScrolledNearBottom(container);
@@ -2116,35 +1467,6 @@ export function ThreadDetail({
     };
   }, []);
 
-  // Detect the soft keyboard via the VisualViewport: when it shrinks the visual
-  // viewport well below the layout viewport, the keyboard is up.
-  useEffect(() => {
-    const vv = typeof window !== "undefined" ? window.visualViewport : null;
-    if (!vv) return;
-    const onResize = () => setKeyboardOpen(window.innerHeight - vv.height > 120);
-    vv.addEventListener("resize", onResize);
-    onResize();
-    return () => vv.removeEventListener("resize", onResize);
-  }, []);
-
-  useEffect(() => {
-    setBody(readDraft(threadId));
-    setReplyingTo(null);
-    setEditingMessageId(null);
-    setEditBody("");
-    setPendingFiles([]);
-    setMentionQuery(null);
-  }, [threadId]);
-
-  useEffect(() => {
-    if (editingMessageId) return;
-    if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
-    draftTimerRef.current = setTimeout(() => writeDraft(threadId, body), 400);
-    return () => {
-      if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
-    };
-  }, [body, editingMessageId, threadId]);
-
   const createPoll = trpc.polls.create.useMutation({
     onSuccess: (msg) => {
       haptic("light");
@@ -2183,18 +1505,6 @@ export function ThreadDetail({
     },
   });
 
-  const mentionSuggestions = useMemo(() => {
-    if (mentionQuery === null || !workspaceMembers) return [];
-    const q = mentionQuery.toLowerCase();
-    const specials = MENTION_SPECIALS
-      .filter((s) => mentionQuery === "" || s.includes(q))
-      .map((s) => ({ id: `__special_${s}`, display_name: s, avatar_url: null }));
-    const matched =
-      mentionQuery === ""
-        ? workspaceMembers
-        : workspaceMembers.filter((m) => m.display_name.toLowerCase().includes(q));
-    return [...specials, ...matched];
-  }, [mentionQuery, workspaceMembers]);
 
 
   useIsoLayoutEffect(() => {
@@ -2273,7 +1583,7 @@ export function ThreadDetail({
   const gazeFieldRef = useRef<GazeField | null>(null);
   useEffect(() => {
     const root = scrollContainerRef.current;
-    const target = composerRef.current;
+    const target = composerApi.current?.inputBox() ?? null;
     if (!root || !target) return;
     const field = createGazeField(root, target);
     gazeFieldRef.current = field;
@@ -2285,13 +1595,6 @@ export function ThreadDetail({
       gazeFieldRef.current = null;
     };
   }, [threadStatus]);
-
-  useEffect(() => {
-    const field = gazeFieldRef.current;
-    if (!field) return;
-    field.setActive(composerFocused && body.trim().length > 0);
-    field.refresh(); // composer grows as you type; re-aim at its new centre
-  }, [composerFocused, body]);
 
   useEffect(() => {
     gazeFieldRef.current?.refresh();
@@ -2464,212 +1767,6 @@ export function ThreadDetail({
     }
   }
 
-  function insertMention(name: string) {
-    const cursor = textareaRef.current?.selectionStart ?? body.length;
-    const textBeforeCursor = body.slice(0, cursor);
-    const lastAtIdx = textBeforeCursor.lastIndexOf("@");
-    const newBody =
-      body.slice(0, lastAtIdx) + "@" + name + " " + body.slice(cursor);
-    setBody(newBody);
-    setMentionQuery(null);
-    setTimeout(() => {
-      if (textareaRef.current) {
-        const newCursor = lastAtIdx + name.length + 2;
-        textareaRef.current.focus();
-        textareaRef.current.setSelectionRange(newCursor, newCursor);
-      }
-    }, 0);
-  }
-
-  function handleBodyChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
-    const val = e.target.value;
-    setBody(val);
-
-    // Detect @mention
-    const cursor = e.target.selectionStart ?? val.length;
-    const textBeforeCursor = val.slice(0, cursor);
-    const lastAtIdx = textBeforeCursor.lastIndexOf("@");
-    if (lastAtIdx >= 0) {
-      const partial = textBeforeCursor.slice(lastAtIdx + 1);
-      if (
-        partial.length <= 40 &&
-        !partial.includes("\n") &&
-        !partial.includes("@")
-      ) {
-        setMentionQuery(partial);
-        setMentionIndex(0);
-      } else {
-        setMentionQuery(null);
-      }
-    } else {
-      setMentionQuery(null);
-    }
-
-    if (presenceChannelRef.current && myInfo) {
-      // Leading-edge only: broadcast typing:true once, then let the 3s timeout
-      // clear it — instead of a presence update on every keystroke.
-      if (!typingActiveRef.current) {
-        typingActiveRef.current = true;
-        presenceChannelRef.current.track({
-          display_name: myInfo.display_name,
-          typing: true,
-          at: Date.now(),
-        });
-      }
-      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
-      typingTimeoutRef.current = setTimeout(stopTyping, 3000);
-    }
-  }
-
-  function pickAudioMime(): { mime: string; ext: string } {
-    const opts: [string, string][] = [
-      ["audio/webm", "webm"],
-      ["audio/mp4", "m4a"],
-      ["audio/ogg", "ogg"],
-    ];
-    for (const [mime, ext] of opts) {
-      if (typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(mime)) {
-        return { mime, ext };
-      }
-    }
-    return { mime: "audio/webm", ext: "webm" };
-  }
-
-  async function startRecording() {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      recordStreamRef.current = stream;
-      const { mime, ext } = pickAudioMime();
-      const rec = new MediaRecorder(stream, { mimeType: mime });
-      recordChunksRef.current = [];
-      rec.ondataavailable = (e) => {
-        if (e.data.size > 0) recordChunksRef.current.push(e.data);
-      };
-      rec.onstop = () => {
-        const blob = new Blob(recordChunksRef.current, { type: mime });
-        const file = new File([blob], `voice-${Date.now()}.${ext}`, { type: mime });
-        setPendingFiles((prev) => [...prev, file]);
-        recordStreamRef.current?.getTracks().forEach((t) => t.stop());
-        recordStreamRef.current = null;
-      };
-      mediaRecorderRef.current = rec;
-      rec.start();
-      setIsRecording(true);
-      setRecordSeconds(0);
-      recordTimerRef.current = setInterval(() => setRecordSeconds((s) => s + 1), 1000);
-    } catch {
-      // mic permission denied / unavailable — silently ignore
-    }
-  }
-
-  function stopRecording() {
-    mediaRecorderRef.current?.stop();
-    if (recordTimerRef.current) clearInterval(recordTimerRef.current);
-    recordTimerRef.current = null;
-    setIsRecording(false);
-  }
-
-  function fmtRec(s: number) {
-    const m = Math.floor(s / 60);
-    return `${m}:${(s % 60).toString().padStart(2, "0")}`;
-  }
-
-  function handleSend() {
-    if (!body.trim() && pendingFiles.length === 0) return;
-
-    stopTyping();
-    // Keep the keyboard up: ignore scroll-up dismiss during the send reflow.
-    suppressKbDismissRef.current = Date.now() + 800;
-    forceScrollOnNextMessageRef.current = true;
-    setUploadError(null);
-    haptic("light");
-    playSend();
-
-    const key = thread.send({
-      body: body.trim(),
-      files: pendingFiles,
-      replyTo: replyingTo
-        ? {
-            id: replyingTo.id,
-            body: replyingTo.body,
-            author_name: replyingTo.authorName,
-            image_url: replyingTo.imageUrl ?? null,
-          }
-        : null,
-      replyToAttachmentUrl: replyingTo?.imageUrl ?? null,
-    });
-    animateKeys.current.add(key);
-
-    if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
-    clearDraft(threadId);
-    setBody("");
-    setPendingFiles([]);
-    setReplyingTo(null);
-    setMentionQuery(null);
-    textareaRef.current?.focus();
-    // Own send: jump, don't glide.
-    requestAnimationFrame(() => scrollToBottom("auto"));
-  }
-
-  function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (mentionSuggestions.length > 0) {
-      if (e.key === "ArrowDown") {
-        e.preventDefault();
-        setMentionIndex((i) => Math.min(i + 1, mentionSuggestions.length - 1));
-        return;
-      }
-      if (e.key === "ArrowUp") {
-        e.preventDefault();
-        setMentionIndex((i) => Math.max(i - 1, 0));
-        return;
-      }
-      if (e.key === "Enter" || e.key === "Tab") {
-        e.preventDefault();
-        insertMention(mentionSuggestions[mentionIndex].display_name);
-        return;
-      }
-      if (e.key === "Escape") {
-        setMentionQuery(null);
-        return;
-      }
-    }
-    if (e.key === "Escape" && replyingTo) {
-      e.preventDefault();
-      setReplyingTo(null);
-      return;
-    }
-    // ↑ in an empty composer edits your last message (standard chat idiom).
-    if (e.key === "ArrowUp" && !e.shiftKey && body.trim() === "" && !editingMessageId) {
-      const last = [...messages]
-        .reverse()
-        .find(
-          (m) =>
-            !!myInfo?.id &&
-            m.user_id === myInfo.id &&
-            !m.is_deleted &&
-            !m.delivery_status &&
-            !!m.body,
-        );
-      if (last) {
-        e.preventDefault();
-        setEditingMessageId(last.id);
-        setEditBody(last.body);
-        requestAnimationFrame(() =>
-          document
-            .getElementById(`message-${last.id}`)
-            ?.scrollIntoView({ behavior: "smooth", block: "nearest" }),
-        );
-      }
-      return;
-    }
-    if (e.key === "Enter" && !e.shiftKey) {
-      // On touch devices, Enter inserts a newline; send via the button instead.
-      if (window.matchMedia("(pointer: coarse)").matches) return;
-      e.preventDefault();
-      handleSend();
-    }
-  }
-
   function handleEditSubmit(messageId: string) {
     if (!editBody.trim()) return;
     thread.editMessage(messageId, editBody.trim());
@@ -2703,7 +1800,7 @@ export function ThreadDetail({
       longPressStartRef.current = null;
       haptic("medium");
       setActiveMessageMenuId(message.id);
-    }, 480);
+    }, 350);
   }
 
   function moveMessageLongPress(e: React.PointerEvent<HTMLDivElement>) {
@@ -2715,8 +1812,6 @@ export function ThreadDetail({
   }
 
   // --- Swipe-right-to-reply (touch) ---
-  const SWIPE_MAX = 72;
-  const SWIPE_TRIGGER = 48;
 
   function onMsgSwipeStart(
     e: React.TouchEvent<HTMLDivElement>,
@@ -2778,8 +1873,7 @@ export function ThreadDetail({
     el.style.transform = "";
     if (s.locked === 1 && off >= SWIPE_TRIGGER) {
       haptic("light");
-      setReplyingTo({ id: message.id, body: message.body, authorName: name, imageUrl: null });
-      textareaRef.current?.focus();
+      composerApi.current?.startReply({ id: message.id, body: message.body, authorName: name, imageUrl: null });
     }
   }
 
@@ -2828,31 +1922,6 @@ export function ThreadDetail({
     setActiveMessageMenuId(message.id);
   }
 
-  function showError(msg: string) {
-    setUploadError(msg);
-    setTimeout(() => setUploadError(null), 6000);
-  }
-
-  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const chosen = Array.from(e.target.files ?? []);
-    e.target.value = "";
-
-    const errors: string[] = [];
-    const valid: File[] = [];
-    for (const file of chosen) {
-      const err = validateFile(file);
-      if (err) errors.push(`${err.file}: ${err.reason}`);
-      else valid.push(file);
-    }
-
-    if (errors.length > 0) showError(errors.join("\n"));
-    if (valid.length > 0) setPendingFiles((prev) => [...prev, ...valid]);
-  }
-
-  function removePendingFile(index: number) {
-    setPendingFiles((prev) => prev.filter((_, i) => i !== index));
-  }
-
   async function copyMessage(messageId: string, text: string) {
     if (!text.trim()) return;
     try {
@@ -2861,45 +1930,121 @@ export function ThreadDetail({
       setCopiedMessageId(messageId);
       setTimeout(() => setCopiedMessageId(null), 1600);
     } catch {
-      setUploadError("Could not copy message.");
+      composerApi.current?.showError("Could not copy message.");
     }
   }
 
   function handleDrop(e: React.DragEvent) {
     e.preventDefault();
-    const dropped = Array.from(e.dataTransfer.files);
-    const errors: string[] = [];
-    const valid: File[] = [];
-    for (const file of dropped) {
-      const err = validateFile(file);
-      if (err) errors.push(`${err.file}: ${err.reason}`);
-      else valid.push(file);
-    }
-    if (errors.length > 0) showError(errors.join("\n"));
-    if (valid.length > 0) setPendingFiles((prev) => [...prev, ...valid]);
+    composerApi.current?.addFiles(Array.from(e.dataTransfer.files));
   }
 
   function handleDragOver(e: React.DragEvent) {
     e.preventDefault();
   }
 
-  // Ctrl/Cmd-V of a screenshot (or any image) stages it as an attachment.
-  // Only intercept when the clipboard actually carries files — a plain-text
-  // paste falls through to the textarea's default behaviour.
-  function handlePaste(e: React.ClipboardEvent) {
-    const pasted = Array.from(e.clipboardData.files);
-    if (pasted.length === 0) return;
-    e.preventDefault();
-    const errors: string[] = [];
-    const valid: File[] = [];
-    for (const file of pasted) {
-      const err = validateFile(file);
-      if (err) errors.push(`${err.file}: ${err.reason}`);
-      else valid.push(file);
+  function noteTyping() {
+    if (!presenceChannelRef.current) return;
+    // Leading-edge only: broadcast typing:true once, then let the 3s timeout
+    // clear it — instead of a presence update on every keystroke.
+    if (!typingActiveRef.current) {
+      typingActiveRef.current = true;
+      presenceChannelRef.current.track({ display_name: me.display_name, typing: true, at: Date.now() });
     }
-    if (errors.length > 0) showError(errors.join("\n"));
-    if (valid.length > 0) setPendingFiles((prev) => [...prev, ...valid]);
+    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+    typingTimeoutRef.current = setTimeout(stopTyping, 3000);
   }
+
+  function editLastOwn(): boolean {
+    if (editingMessageId) return false;
+    const last = [...messages]
+      .reverse()
+      .find((m) => m.user_id === me.id && !m.is_deleted && !m.delivery_status && !!m.body);
+    if (!last) return false;
+    setEditingMessageId(last.id);
+    setEditBody(last.body);
+    requestAnimationFrame(() =>
+      document.getElementById(`message-${last.id}`)?.scrollIntoView({ behavior: "smooth", block: "nearest" }),
+    );
+    return true;
+  }
+
+  const composerActions = useStableActions({
+    onSend: (input: { body: string; files: File[]; replyTo: ReplyTo | null; replyToAttachmentUrl: string | null }) => {
+      stopTyping();
+      // Keep the keyboard up: ignore scroll-up dismiss during the send reflow.
+      suppressKbDismissRef.current = Date.now() + 800;
+      forceScrollOnNextMessageRef.current = true;
+      haptic("light");
+      playSend();
+      const key = thread.send(input);
+      animateKeys.current.add(key);
+      // Own send: jump, don't glide.
+      requestAnimationFrame(() => scrollToBottom("auto"));
+    },
+    onTyping: noteTyping,
+    onGaze: (active: boolean) => {
+      gazeFieldRef.current?.setActive(active);
+      gazeFieldRef.current?.refresh();
+    },
+    onEditLastOwn: editLastOwn,
+    onOpenPoll: () => setShowPollCreate(true),
+    onOpenSmeter: () => setShowSMeterCreate(true),
+    onReopen: () => {
+      setThreadStatus("OPEN");
+      reopenFromBanner.mutate({ threadId, status: "OPEN" });
+      requestAnimationFrame(() => composerApi.current?.focus());
+    },
+  });
+
+  function showTooltipBriefly(key: string) {
+    setActiveTooltip(key);
+    if (tooltipTimerRef.current) clearTimeout(tooltipTimerRef.current);
+    tooltipTimerRef.current = setTimeout(() => setActiveTooltip(null), 2500);
+  }
+
+  const rowActions: RowActions = useStableActions({
+    longPressStart: startMessageLongPress,
+    longPressMove: moveMessageLongPress,
+    longPressClear: clearLongPressTimer,
+    openMenu: openMessageMenuFromContext,
+    swipeStart: onMsgSwipeStart,
+    swipeMove: onMsgSwipeMove,
+    swipeEnd: onMsgSwipeEnd,
+    openProfile: (target: ProfileTarget) => setProfileTarget(target),
+    openReplyImage,
+    jumpTo: jumpToMessage,
+    startEdit: (id: string, text: string) => {
+      setEditingMessageId(id);
+      setEditBody(text);
+    },
+    setEditBody: (value: string) => setEditBody(value),
+    submitEdit: handleEditSubmit,
+    cancelEdit: () => {
+      setEditingMessageId(null);
+      setEditBody("");
+    },
+    copy: (id: string, text: string) => void copyMessage(id, text),
+    reply: (target: { id: string; body: string; authorName: string; imageUrl: string | null }) => {
+      composerApi.current?.startReply(target);
+    },
+    openLightbox: (payload: { images: Attachment[]; index: number; reply: ReplyTarget }) => setActiveLightbox(payload),
+    holdImage: (payload: { attachment: Attachment; reply: ReplyTarget }) => setImageActions(payload),
+    react: (id: string, type: string) => thread.toggleReaction(id, type),
+    remove: (id: string) => thread.deleteMessage(id),
+    retry: (key: string) => thread.retry(key),
+    discard: (key: string) => thread.discard(key),
+    reactionPressStart: startReactionPress,
+    reactionPressMove: moveReactionPress,
+    reactionPressEnd: endReactionPress,
+    setTooltip: (key: string | null) => setActiveTooltip(key),
+    showTooltipBriefly,
+    consumeReactionLongPress: (key: string) => {
+      if (reactionLongPressedRef.current !== key) return false;
+      reactionLongPressedRef.current = null;
+      return true;
+    },
+  });
 
   // Server rows + pending sends, already ordered (pending last).
   const displayMessages = messages;
@@ -2965,9 +2110,9 @@ export function ThreadDetail({
   }, [displayMessages]);
 
   const isDone = threadStatus === "DONE";
-  const canSend = !isDone && (body.trim().length > 0 || pendingFiles.length > 0);
 
-  const members = workspaceMembers ?? [];
+  const members = workspaceMembers ?? EMPTY_MEMBERS;
+  const mentions = useMemo(() => buildMentionMatcher(members, MENTION_SPECIALS), [members]);
   // Past this size, enable content-visibility windowing on message rows.
   const bigThread = displayMessages.length > 60;
 
@@ -3074,7 +2219,7 @@ export function ThreadDetail({
             ))}
           </div>
         ) : (
-          <div className="mt-auto">
+          <div className="mt-auto" ref={listContentRef}>
           {displayMessages.length === 0 ? (
             <div className="flex items-center justify-center h-32">
               <p className="font-mono text-sm text-muted">
@@ -3118,613 +2263,40 @@ export function ThreadDetail({
                       new Date(msg.created_at).getTime() -
                         new Date(prevMsg.created_at).getTime() <
                         5 * 60_000;
-                    const name = msg.profiles?.display_name ?? "Unknown";
-                    const isOwnMessage = msg.user_id === myInfo?.id;
-                    const blobMood =
-                      msg.delivery_status === "sending"
-                        ? thinking
-                        : msg.delivery_status === "failed"
-                          ? sad
-                          : blobMoods[msg.id];
                     const isEditing = editingMessageId === msg.id;
-                    const isLocalMessage = !!msg.delivery_status;
-                    const canRetry = !msg.missing_files?.length;
-                    const seenReaders = seenByMessage[msg.id] ?? [];
-
+                    const tooltipPrefix = `${msg.id}:`;
                     return (
-                      <div
+                      <MessageRow
                         key={msg.client_id ?? msg.id}
-                        id={`message-${msg.id}`}
-                        className="relative flex gap-3 group rounded-sm px-2 -mx-2 select-none md:select-text"
-                        style={{
-                          marginTop: isSameAuthor ? 2 : 14,
-                          WebkitTouchCallout: "none",
-                          // In long threads, let the browser skip layout/paint
-                          // for off-screen rows (kept in the DOM, so reply-jump
-                          // and highlight via getElementById still work).
-                          contentVisibility:
-                            bigThread ? "auto" : undefined,
-                          containIntrinsicSize: bigThread ? "auto 56px" : undefined,
-                          userSelect:
-                            activeMessageMenuId === msg.id ? "none" : undefined,
-                          animation: (() => {
-                            const parts: string[] = [];
-                            if (animateKeys.current.has(msg.client_id ?? msg.id)) {
-                              parts.push("fadeUp 360ms ease-out both");
-                            }
-                            if (msg.id === highlightMessageId || msg.id === jumpFlashId) {
-                              parts.push("messageHighlight 2.4s 400ms ease-out forwards");
-                            }
-                            return parts.length ? parts.join(", ") : undefined;
-                          })(),
-                        }}
-                        onPointerDown={(e) => startMessageLongPress(e, msg)}
-                        onPointerMove={moveMessageLongPress}
-                        onPointerUp={clearLongPressTimer}
-                        onPointerCancel={clearLongPressTimer}
-                        onPointerLeave={clearLongPressTimer}
-                        onContextMenu={(e) => openMessageMenuFromContext(e, msg)}
-                        onTouchStart={(e) => onMsgSwipeStart(e, msg)}
-                        onTouchMove={(e) => onMsgSwipeMove(e, msg)}
-                        onTouchEnd={(e) => onMsgSwipeEnd(e, msg, name)}
-                        onTouchCancel={(e) => onMsgSwipeEnd(e, msg, name)}
-                        onMouseEnter={(e) => {
-                          if (!window.matchMedia("(hover: hover)").matches) return;
-                          const actions =
-                            e.currentTarget.querySelector<HTMLElement>(
-                              ".msg-actions",
-                            );
-                          if (actions) {
-                            actions.style.opacity = "1";
-                            actions.style.pointerEvents = "auto";
-                          }
-                        }}
-                        onMouseLeave={(e) => {
-                          if (!window.matchMedia("(hover: hover)").matches) return;
-                          const actions =
-                            e.currentTarget.querySelector<HTMLElement>(
-                              ".msg-actions",
-                            );
-                          if (actions) {
-                            actions.style.opacity = "0";
-                            actions.style.pointerEvents = "none";
-                          }
-                        }}
-                      >
-                        {/* Avatar column */}
-                        <div className="relative w-7 flex-shrink-0">
-                          {(!isSameAuthor || blobMood) && (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setProfileTarget({
-                                  id: msg.user_id,
-                                  name,
-                                })
-                              }
-                              className={
-                                isSameAuthor
-                                  ? // Mood-only blob on a grouped row: small and
-                                    // out of flow so the row never jumps.
-                                    "absolute top-0 left-1 hover:opacity-80 transition-opacity"
-                                  : "block text-left hover:opacity-80 transition-opacity"
-                              }
-                              title={`Open ${name}`}
-                            >
-                              <Avatar
-                                userId={msg.user_id}
-                                name={name}
-                                size={isSameAuthor ? 20 : 28}
-                                animate="hover"
-                                expression={blobMood}
-                              />
-                            </button>
-                          )}
-                        </div>
-
-                        <div className="flex-1 min-w-0">
-                          {!isSameAuthor && (
-                            <div className="flex items-baseline gap-2 mb-0.5">
-                              <span className="text-[15px] font-semibold text-ink">
-                                {name}
-                              </span>
-                              <span className="font-mono text-[12px] text-muted">
-                                {formatTime(msg.created_at)}
-                              </span>
-                            </div>
-                          )}
-
-                          <div className={`relative ${msg.delivery_status === "sending" && msg.upload_progress !== undefined ? "opacity-70" : ""}`}>
-                            {/* Reply quote */}
-                            {msg.reply_to && !msg.is_deleted && (
-                              <div className="flex items-center gap-1.5 mb-1 border-l-2 border-border pl-2 hover:border-ink/40 transition-colors group/reply">
-                                {msg.reply_to.image_url && (
-                                  <button
-                                    onClick={() =>
-                                      openReplyImage(msg.reply_to!)
-                                    }
-                                    aria-label="Open replied-to image"
-                                    className="flex-shrink-0"
-                                  >
-                                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                                    <img
-                                      src={msg.reply_to.image_url}
-                                      alt=""
-                                      className="w-8 h-8 object-cover border border-border"
-                                    />
-                                  </button>
-                                )}
-                                <button
-                                  className="min-w-0 text-left flex-1"
-                                  onClick={() => void jumpToMessage(msg.reply_to!.id)}
-                                >
-                                  <span className="font-mono text-[12px] text-muted font-semibold block">
-                                    {msg.reply_to.author_name}
-                                  </span>
-                                  <p className="text-[13px] text-muted truncate leading-snug">
-                                    {msg.reply_to.body || (msg.reply_to.image_url ? "(image)" : "")}
-                                  </p>
-                                </button>
-                              </div>
-                            )}
-
-                            {/* Deleted message tombstone */}
-                            {msg.is_deleted ? (
-                              <p className="text-[13px] text-muted italic font-mono">
-                                message deleted
-                              </p>
-                            ) : isEditing ? (
-                              <div className="mt-0.5">
-                                <textarea
-                                  value={editBody}
-                                  onChange={(e) => setEditBody(e.target.value)}
-                                  className="w-full border border-pastel-deep bg-surface-2 px-2.5 py-2 font-sans text-[13.5px] leading-[1.55] text-ink resize-none outline-none focus:ring-0"
-                                  style={{
-                                    boxShadow: "0 0 0 3px var(--pastel-tint)",
-                                  }}
-                                  rows={Math.max(
-                                    2,
-                                    editBody.split("\n").length,
-                                  )}
-                                  autoFocus
-                                  onKeyDown={(e) => {
-                                    if (e.key === "Escape") {
-                                      setEditingMessageId(null);
-                                      setEditBody("");
-                                    }
-                                    if (e.key === "Enter" && !e.shiftKey) {
-                                      if (
-                                        window.matchMedia("(pointer: coarse)")
-                                          .matches
-                                      )
-                                        return;
-                                      e.preventDefault();
-                                      handleEditSubmit(msg.id);
-                                    }
-                                  }}
-                                />
-                                <div className="flex items-center gap-2 mt-1">
-                                  <button
-                                    onClick={() => handleEditSubmit(msg.id)}
-                                    disabled={
-                                      !editBody.trim()
-                                    }
-                                    className="font-mono text-[10px] uppercase tracking-wider bg-ink text-surface px-2.5 py-1 hover:bg-ink/90 disabled:opacity-40 transition-colors"
-                                  >
-                                    save
-                                  </button>
-                                  <button
-                                    onClick={() => {
-                                      setEditingMessageId(null);
-                                      setEditBody("");
-                                    }}
-                                    className="font-mono text-[10px] uppercase tracking-wider text-muted hover:text-ink transition-colors"
-                                  >
-                                    cancel
-                                  </button>
-                                  <span className="font-mono text-[10px] text-muted-2 ml-1">
-                                    esc · ⏎ save
-                                  </span>
-                                </div>
-                              </div>
-                            ) : (
-                              <>
-                                {msg.poll && (
-                                  <PollView
-                                    poll={msg.poll}
-                                    myInfo={myInfo}
-                                  />
-                                )}
-                                {msg.smeter && (
-                                  <SMeterCard smeter={msg.smeter} threadId={threadId} />
-                                )}
-                                {msg.body && (
-                                  <p className="text-[16px] leading-[1.5] text-ink whitespace-pre-wrap break-words">
-                                    {renderBody(
-                                      msg.body,
-                                      members,
-                                      myInfo?.id ?? "",
-                                    )}
-                                  </p>
-                                )}
-                                {!msg.is_deleted && (() => {
-                                  const u = msg.body?.match(/https?:\/\/[^\s]+/i)?.[0];
-                                  return u ? <LinkPreview url={u} /> : null;
-                                })()}
-                                {msg.edited_at && (
-                                  <span className="font-mono text-[10px] text-muted-2 ml-0.5">
-                                    (edited)
-                                  </span>
-                                )}
-                              </>
-                            )}
-
-                            {/* Hover action bar */}
-                            {!isEditing && !msg.is_deleted && !isLocalMessage && (
-                              <div
-                                className="msg-actions select-none absolute -top-[14px] right-0 flex gap-0.5 bg-surface-2 border border-border p-0.5"
-                                style={{
-                                  opacity: 0,
-                                  // Invisible by default and only revealed on real
-                                  // hover (desktop). pointer-events must track
-                                  // opacity, otherwise on touch — where mouseenter
-                                  // never fires — the hidden reaction/copy buttons
-                                  // stay tappable and a stray tap fires a phantom
-                                  // reaction.
-                                  pointerEvents: "none",
-                                  transition: "opacity 160ms ease",
-                                }}
-                              >
-                                {msg.body.trim().length > 0 && (
-                                  <button
-                                    onClick={() => copyMessage(msg.id, msg.body)}
-                                    title="Copy"
-                                    className="px-1.5 py-0.5 font-mono text-[10px] text-muted hover:text-ink transition-all border-none bg-transparent cursor-pointer leading-none"
-                                  >
-                                    {copiedMessageId === msg.id ? "ok" : "copy"}
-                                  </button>
-                                )}
-
-                                {/* Reply button */}
-                                <button
-                                  onClick={() => {
-                                    setReplyingTo({
-                                      id: msg.id,
-                                      body: msg.body,
-                                      authorName: name,
-                                      imageUrl: null,
-                                    });
-                                    textareaRef.current?.focus();
-                                  }}
-                                  title="Reply"
-                                  className="px-1.5 py-0.5 text-[13px] text-muted hover:text-ink hover:scale-110 transition-all border-none bg-transparent cursor-pointer leading-none"
-                                >
-                                  ↩
-                                </button>
-
-                                {/* Edit + delete — own messages only */}
-                                {isOwnMessage && (
-                                  <>
-                                    <button
-                                      onClick={() => {
-                                        setEditingMessageId(msg.id);
-                                        setEditBody(msg.body);
-                                      }}
-                                      title="Edit"
-                                      className="px-1.5 py-0.5 text-[13px] text-muted hover:text-ink hover:scale-110 transition-all border-none bg-transparent cursor-pointer leading-none"
-                                    >
-                                      ✎
-                                    </button>
-                                    <button
-                                      onClick={() => thread.deleteMessage(msg.id)}
-                                      title="Delete"
-                                      className="px-1.5 py-0.5 text-[13px] text-muted hover:text-red-500 hover:scale-110 transition-all border-none bg-transparent cursor-pointer leading-none"
-                                    >
-                                      ×
-                                    </button>
-                                  </>
-                                )}
-
-                                {/* Reaction buttons */}
-                                {REACTION_TYPES.map((emoji) => (
-                                  <button
-                                    key={emoji}
-                                    onClick={() => thread.toggleReaction(msg.id, emoji)}
-                                    className="px-1.5 py-0.5 text-sm hover:scale-125 transition-transform border-none bg-transparent cursor-pointer"
-                                  >
-                                    {emoji}
-                                  </button>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-
-                          {/* Attachments */}
-                          {!msg.is_deleted &&
-                            (msg.attachments ?? []).length > 0 &&
-                            (() => {
-                              const imgAtts = msg.attachments.filter(
-                                (a) => a.type === "image",
-                              );
-                              const audioAtts = msg.attachments.filter(
-                                (a) => a.type === "audio",
-                              );
-                              const videoAtts = msg.attachments.filter(
-                                (a) => a.type === "video",
-                              );
-                              const fileAtts = msg.attachments.filter(
-                                (a) => a.type === "file",
-                              );
-                              return (
-                                <div className="mt-2 space-y-2">
-                                  {imgAtts.length === 1 && (
-                                    <ThreadImage
-                                      att={imgAtts[0]}
-                                      onOpen={() =>
-                                        setActiveLightbox({
-                                          images: imgAtts,
-                                          index: 0,
-                                          reply: {
-                                            id: msg.id,
-                                            body: msg.body,
-                                            authorName: name,
-                                          },
-                                        })
-                                      }
-                                      onHold={() =>
-                                        setImageActions({
-                                          attachment: imgAtts[0],
-                                          reply: {
-                                            id: msg.id,
-                                            body: msg.body,
-                                            authorName: name,
-                                          },
-                                        })
-                                      }
-                                    />
-                                  )}
-                                  {imgAtts.length >= 2 && (
-                                    <ImageGallery
-                                      attachments={imgAtts}
-                                      onOpen={(att) =>
-                                        setActiveLightbox({
-                                          images: imgAtts,
-                                          index: Math.max(
-                                            0,
-                                            imgAtts.indexOf(att),
-                                          ),
-                                          reply: {
-                                            id: msg.id,
-                                            body: msg.body,
-                                            authorName: name,
-                                          },
-                                        })
-                                      }
-                                      onHold={(att) =>
-                                        setImageActions({
-                                          attachment: att,
-                                          reply: {
-                                            id: msg.id,
-                                            body: msg.body,
-                                            authorName: name,
-                                          },
-                                        })
-                                      }
-                                    />
-                                  )}
-                                  {videoAtts.length > 0 && (
-                                    <div className="flex flex-col gap-2">
-                                      {videoAtts.map((att, i) => (
-                                        <video
-                                          key={i}
-                                          controls
-                                          src={localPreview(att.url) ?? att.url}
-                                          className="max-w-xs border border-border"
-                                          style={{ maxHeight: 320 }}
-                                        />
-                                      ))}
-                                    </div>
-                                  )}
-                                  {audioAtts.length > 0 && (
-                                    <div className="flex flex-col gap-2">
-                                      {audioAtts.map((att, i) => (
-                                        <div
-                                          key={i}
-                                          className="border border-border bg-surface-2 px-2.5 py-2 max-w-xs"
-                                        >
-                                          <span className="font-mono text-[10px] text-muted block mb-1 truncate">
-                                            {att.name}
-                                          </span>
-                                          {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
-                                          <audio controls src={att.url} className="w-full h-8" />
-                                        </div>
-                                      ))}
-                                    </div>
-                                  )}
-                                  {fileAtts.length > 0 && (
-                                    <div className="flex flex-wrap gap-2">
-                                      {fileAtts.map((att, i) => {
-                                        const ext = (att.name.split(".").pop() ?? "").toUpperCase().slice(0, 4);
-                                        return (
-                                          <a
-                                            key={i}
-                                            href={att.url}
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            className="flex items-center gap-2 border border-border px-3 py-2 hover:border-pastel-deep transition-colors"
-                                          >
-                                            <span className="w-8 h-8 flex items-center justify-center bg-ink text-surface font-mono text-[9px] font-semibold flex-shrink-0">
-                                              {ext || "FILE"}
-                                            </span>
-                                            <span className="font-mono text-xs text-ink max-w-[160px] truncate">
-                                              {att.name}
-                                            </span>
-                                          </a>
-                                        );
-                                      })}
-                                    </div>
-                                  )}
-                                </div>
-                              );
-                            })()}
-
-                          {/* Reaction chips */}
-                          {!msg.is_deleted &&
-                            (msg.reactions ?? []).some((r) => r.count > 0) && (
-                              <div className="flex flex-wrap gap-1 mt-1.5">
-                                {msg.reactions
-                                  .filter((r) => r.count > 0)
-                                  .map((r) => {
-                                    const tooltipKey = `${msg.id}:${r.type}`;
-                                    const isTooltipVisible =
-                                      activeTooltip === tooltipKey;
-                                    return (
-                                      <div key={r.type} className="relative">
-                                        <button
-                                          onClick={() => {
-                                            // Swallow the click that ends a
-                                            // long-press so it doesn't toggle.
-                                            if (
-                                              reactionLongPressedRef.current ===
-                                              tooltipKey
-                                            ) {
-                                              reactionLongPressedRef.current =
-                                                null;
-                                              return;
-                                            }
-                                            thread.toggleReaction(msg.id, r.type);
-                                          }}
-                                          onMouseEnter={() =>
-                                            setActiveTooltip(tooltipKey)
-                                          }
-                                          onMouseLeave={() =>
-                                            setActiveTooltip(null)
-                                          }
-                                          onPointerDown={(e) =>
-                                            startReactionPress(e, tooltipKey)
-                                          }
-                                          onPointerMove={moveReactionPress}
-                                          onPointerUp={endReactionPress}
-                                          onPointerCancel={endReactionPress}
-                                          onPointerLeave={endReactionPress}
-                                          onTouchStart={(e) => e.stopPropagation()}
-                                          onContextMenu={(e) => {
-                                            e.preventDefault();
-                                            setActiveTooltip(tooltipKey);
-                                            if (tooltipTimerRef.current)
-                                              clearTimeout(
-                                                tooltipTimerRef.current,
-                                              );
-                                            tooltipTimerRef.current =
-                                              setTimeout(
-                                                () => setActiveTooltip(null),
-                                                2500,
-                                              );
-                                          }}
-                                          className={`inline-flex items-center gap-1 font-mono text-[11px] px-[7px] py-0.5 border transition-all duration-150 ${
-                                            r.userReacted
-                                              ? "bg-pastel-tint text-pastel-ink border-pastel-deep"
-                                              : "text-muted border-border hover:border-pastel-deep"
-                                          }`}
-                                          style={
-                                            r.userReacted
-                                              ? {
-                                                  animation:
-                                                    "pop 240ms ease-out",
-                                                }
-                                              : undefined
-                                          }
-                                        >
-                                          <span className="text-[12px]">
-                                            {r.type}
-                                          </span>
-                                          <span>{r.count}</span>
-                                        </button>
-                                        {isTooltipVisible &&
-                                          r.users.length > 0 && (
-                                            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 z-30 max-h-40 overflow-y-auto bg-ink text-surface font-mono text-[10px] px-2.5 py-1.5 pointer-events-none min-w-max max-w-[180px] space-y-0.5">
-                                              <div className="text-surface/50 uppercase tracking-[0.1em] mb-1">
-                                                {r.type} {r.count}
-                                              </div>
-                                              {r.users.map((u, i) => (
-                                                <div key={i} className="truncate">
-                                                  {u}
-                                                </div>
-                                              ))}
-                                            </div>
-                                          )}
-                                      </div>
-                                    );
-                                  })}
-                              </div>
-                            )}
-
-                          {msg.upload_progress !== undefined && (
-                            <div className="mt-1 h-0.5 w-full max-w-[272px] bg-border overflow-hidden">
-                              <div
-                                className="h-full bg-ink transition-[width] duration-150 ease-out"
-                                style={{ width: `${Math.round(msg.upload_progress * 100)}%` }}
-                              />
-                            </div>
-                          )}
-                          {msg.delivery_status === "sending" && (
-                            <span
-                              aria-label="sending"
-                              className="absolute -right-1 bottom-0 font-mono text-[10px] text-muted-2 leading-none"
-                            >
-                              🕓
-                            </span>
-                          )}
-                          {thread.rowErrors[msg.id] && (
-                            <p className="font-mono text-[10px] text-red-600 mt-1">{thread.rowErrors[msg.id]}</p>
-                          )}
-
-                          {msg.delivery_status === "failed" && (
-                            <div className="flex items-center gap-2 mt-1">
-                              {canRetry ? (
-                                <button
-                                  onClick={() => msg.fail_id && thread.retry(msg.fail_id)}
-                                  className="font-mono text-[10px] text-red-600 hover:text-red-700"
-                                >
-                                  failed - retry
-                                </button>
-                              ) : (
-                                <span className="font-mono text-[10px] text-red-600">attachment lost</span>
-                              )}
-                              <button
-                                onClick={() => msg.fail_id && thread.discard(msg.fail_id)}
-                                className="font-mono text-[13px] leading-none text-muted hover:text-ink"
-                              >
-                                x
-                              </button>
-                            </div>
-                          )}
-
-                          {seenReaders.length > 0 && (
-                            <div className="absolute right-2 -bottom-2 z-10 flex items-center justify-end gap-0 pointer-events-none">
-                              {seenReaders.slice(0, 5).map((reader, readerIndex) => (
-                                <div
-                                  key={reader.id}
-                                  className="border border-surface rounded-sm"
-                                  style={{ marginLeft: readerIndex === 0 ? 0 : -6 }}
-                                  title={`Seen by ${reader.name}`}
-                                >
-                                  <Avatar
-                                    userId={reader.id}
-                                    name={reader.name}
-                                    size={16}
-                                  />
-                                </div>
-                              ))}
-                              {seenReaders.length > 5 && (
-                                <span className="font-mono text-[10px] text-muted-2 ml-1">
-                                  +{seenReaders.length - 5}
-                                </span>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      </div>
+                        msg={msg}
+                        isOwn={msg.user_id === me.id}
+                        isSameAuthor={isSameAuthor}
+                        mood={
+                          msg.delivery_status === "sending"
+                            ? thinking
+                            : msg.delivery_status === "failed"
+                              ? sad
+                              : blobMoods[msg.id]
+                        }
+                        animate={animateKeys.current.has(msg.client_id ?? msg.id)}
+                        flash={msg.id === highlightMessageId || msg.id === jumpFlashId}
+                        menuOpen={activeMessageMenuId === msg.id}
+                        isEditing={isEditing}
+                        editBody={isEditing ? editBody : undefined}
+                        tooltipType={
+                          activeTooltip?.startsWith(tooltipPrefix)
+                            ? activeTooltip.slice(tooltipPrefix.length)
+                            : null
+                        }
+                        copied={copiedMessageId === msg.id}
+                        rowError={thread.rowErrors[msg.id]}
+                        seenReaders={seenByMessage[msg.id] ?? EMPTY_READERS}
+                        bigThread={bigThread}
+                        threadId={threadId}
+                        me={me}
+                        mentions={mentions}
+                        actions={rowActions}
+                      />
                     );
                   })}
                 </div>
@@ -3795,8 +2367,7 @@ export function ThreadDetail({
           index={activeLightbox.index}
           onDownload={(att) => void downloadAttachment(att)}
           onReply={(att) => {
-            setReplyingTo({ ...activeLightbox.reply, imageUrl: att.url });
-            textareaRef.current?.focus();
+            composerApi.current?.startReply({ ...activeLightbox.reply, imageUrl: att.url });
           }}
           onClose={() => setActiveLightbox(null)}
         />
@@ -3807,11 +2378,7 @@ export function ThreadDetail({
         <AttachmentActions
           attachment={imageActions.attachment}
           onReply={() => {
-            setReplyingTo({
-              ...imageActions.reply,
-              imageUrl: imageActions.attachment.url,
-            });
-            textareaRef.current?.focus();
+            composerApi.current?.startReply({ ...imageActions.reply, imageUrl: imageActions.attachment.url });
           }}
           onClose={() => setImageActions(null)}
         />
@@ -3913,14 +2480,13 @@ export function ThreadDetail({
                 <button
                   type="button"
                   onClick={() => {
-                    setReplyingTo({
+                    composerApi.current?.startReply({
                       id: activeMessageMenu.id,
                       body: activeMessageMenu.body,
                       authorName: activeMessageMenu.profiles?.display_name ?? "Unknown",
                       imageUrl: null,
                     });
                     setActiveMessageMenuId(null);
-                    textareaRef.current?.focus();
                   }}
                   className="flex h-11 flex-1 items-center justify-center border border-border bg-surface-2 px-3 font-mono text-[11px] uppercase tracking-[0.1em] text-ink transition-colors active:bg-pastel-tint"
                 >
@@ -3969,314 +2535,48 @@ export function ThreadDetail({
         </>
       )}
 
-      {/* Composer */}
-      <div
-        className={`px-4 md:px-6 pt-3 md:pt-[14px] pb-4 border-t border-border flex-shrink-0 relative ${
-          keyboardOpen ? "" : "pb-safe"
-        }`}
-        onTouchStart={(e) => {
-          composerTouchYRef.current = e.touches[0]?.clientY ?? null;
-        }}
-        onTouchMove={(e) => {
-          const start = composerTouchYRef.current;
-          if (start == null) return;
-          const dy = (e.touches[0]?.clientY ?? start) - start;
-          // Swipe down on the input bar dismisses the keyboard.
-          if (dy > 40 && document.activeElement === textareaRef.current) {
-            textareaRef.current?.blur();
-            composerTouchYRef.current = null;
-          }
-        }}
-        onTouchEnd={() => {
-          composerTouchYRef.current = null;
-        }}
-      >
-        {hasNewMessages && (
-          <button
-            type="button"
-            onClick={() => scrollToBottom("auto")}
-            className="absolute bottom-full left-1/2 z-10 mb-3 -translate-x-1/2 border border-border-strong bg-ink px-3 py-2 font-mono text-[11px] uppercase tracking-[0.1em] text-surface shadow-lg transition-all duration-150 hover:-translate-y-px hover:bg-ink/90"
-            aria-label="Jump to latest message"
-          >
-            new messages
-          </button>
-        )}
-
-        {/* @mention suggestions dropdown */}
-        {mentionSuggestions.length > 0 && (
-          <div className="absolute bottom-full left-4 right-4 md:left-6 md:right-6 mb-1 bg-surface border border-border shadow-lg z-20">
-            {mentionSuggestions.map((member, i) => (
-              <button
-                key={member.id}
-                className={`w-full text-left px-3 py-2 font-mono text-[12px] text-ink transition-colors border-b border-border last:border-b-0 ${
-                  i === mentionIndex ? "bg-surface-2" : "hover:bg-surface-2"
-                }`}
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => insertMention(member.display_name)}
-              >
-                <span className="text-muted">@</span>
-                {member.display_name}
-              </button>
-            ))}
-          </div>
-        )}
-
-        {isDone && (
-          <div className="flex items-center justify-center gap-3 py-2.5 mb-0 border border-done-tint bg-done-tint/50">
-            <span className="font-mono text-[11px] text-done-ink uppercase tracking-[0.12em]">
-              thread closed
-            </span>
-            <button
-              onClick={() => {
-                setThreadStatus("OPEN");
-                reopenFromBanner.mutate({ threadId, status: "OPEN" });
-                requestAnimationFrame(() => textareaRef.current?.focus());
-              }}
-              disabled={reopenFromBanner.isPending}
-              className="font-mono text-[11px] uppercase tracking-[0.12em] px-2.5 py-1 border border-border-strong text-ink bg-surface hover:bg-border/40 transition-colors disabled:opacity-40"
-            >
-              reopen to reply
-            </button>
-          </div>
-        )}
-        {!isDone && uploadError && (
-          <div className="flex items-start justify-between gap-3 mb-2 px-3 py-2 border border-red-200 bg-red-50">
-            <p className="font-mono text-[11px] text-red-700 whitespace-pre-wrap leading-snug">
-              {uploadError}
-            </p>
-            <button
-              onClick={() => setUploadError(null)}
-              className="font-mono text-[13px] leading-none text-red-400 hover:text-red-700 transition-colors flex-shrink-0 mt-px"
-            >
-              ×
-            </button>
-          </div>
-        )}
-
-        {/* Reply banner */}
-        {!isDone && replyingTo && (
-          <div className="flex items-center gap-2 mb-2 pl-3 pr-2 py-2 border-l-2 border-pastel-deep bg-surface-2">
-            {replyingTo.imageUrl && (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={replyingTo.imageUrl}
-                alt=""
-                className="w-9 h-9 object-cover border border-border flex-shrink-0"
-              />
-            )}
-            <div className="flex-1 min-w-0">
-              <span className="font-mono text-[10px] text-muted uppercase tracking-wider">
-                replying to {replyingTo.authorName}
-              </span>
-              <p className="text-[12px] text-muted truncate mt-0.5 leading-snug">
-                {replyingTo.body || (replyingTo.imageUrl ? "(image)" : "(attachment)")}
-              </p>
-            </div>
-            <button
-              onClick={() => setReplyingTo(null)}
-              className="font-mono text-base leading-none text-muted hover:text-ink transition-colors flex-shrink-0 mt-0.5"
-            >
-              ×
-            </button>
-          </div>
-        )}
-
-        {/* Pending file previews */}
-        {!isDone && pendingFiles.length > 0 && (
-          <div className="flex flex-wrap gap-2 mb-2">
-            {pendingFiles.map((file, i) => (
-              <PendingPreview
-                key={i}
-                file={file}
-                onRemove={() => removePendingFile(i)}
-              />
-            ))}
-          </div>
-        )}
-
-        {!isDone && (
-          <div
-            ref={composerRef}
-            className="border border-border bg-surface-2 flex items-end gap-0 transition-all duration-200"
-            onFocusCapture={(e) => {
-              const el = e.currentTarget as HTMLElement;
-              el.style.borderColor = "var(--pastel-deep)";
-              el.style.boxShadow = "0 0 0 3px var(--pastel-tint)";
-            }}
-            onBlurCapture={(e) => {
-              const el = e.currentTarget as HTMLElement;
-              el.style.borderColor = "";
-              el.style.boxShadow = "";
-            }}
-          >
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*,audio/*,video/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip"
-              multiple
-              className="hidden"
-              onChange={handleFileChange}
-            />
-            {/* "+" attach menu */}
-            <div className="relative flex-shrink-0">
-              <button
-                type="button"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => setAttachMenuOpen((o) => !o)}
-                title="Attach or create poll"
-                className="h-11 w-11 md:h-10 md:w-10 flex items-center justify-center text-muted hover:text-pastel-ink transition-colors font-mono text-lg leading-none"
-              >
-                +
-              </button>
-              {attachMenuOpen && (
-                <>
-                  <div
-                    className="fixed inset-0 z-10"
-                    onClick={() => setAttachMenuOpen(false)}
-                  />
-                  <div className="absolute bottom-full left-0 mb-1 z-20 bg-surface border border-border shadow-lg min-w-[160px]">
-                    <button
-                      className="w-full text-left px-3 py-2 font-mono text-[12px] text-ink hover:bg-surface-2 border-b border-border"
-                      onClick={() => {
-                        setAttachMenuOpen(false);
-                        fileInputRef.current?.click();
-                      }}
-                    >
-                      Attach a file
-                    </button>
-                    <button
-                      className="w-full text-left px-3 py-2 font-mono text-[12px] text-ink hover:bg-surface-2 border-b border-border"
-                      onClick={() => {
-                        setAttachMenuOpen(false);
-                        setShowPollCreate(true);
-                      }}
-                    >
-                      Create a poll
-                    </button>
-                    <button
-                      className="w-full text-left px-3 py-2 font-mono text-[12px] text-ink hover:bg-surface-2"
-                      onClick={() => {
-                        setAttachMenuOpen(false);
-                        setShowSMeterCreate(true);
-                      }}
-                    >
-                      Create an S-meter
-                    </button>
-                  </div>
-                </>
-              )}
-            </div>
-            {/* Voice record */}
+      <Composer
+        ref={composerApi}
+        threadId={threadId}
+        isDone={isDone}
+        reopenPending={reopenFromBanner.isPending}
+        members={members}
+        onSend={composerActions.onSend}
+        onTyping={composerActions.onTyping}
+        onGaze={composerActions.onGaze}
+        onEditLastOwn={composerActions.onEditLastOwn}
+        onOpenPoll={composerActions.onOpenPoll}
+        onOpenSmeter={composerActions.onOpenSmeter}
+        onReopen={composerActions.onReopen}
+        overlay={
+          hasNewMessages ? (
             <button
               type="button"
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={isRecording ? stopRecording : startRecording}
-              title={isRecording ? "Stop recording" : "Record voice message"}
-              className={`h-11 md:h-10 flex items-center justify-center flex-shrink-0 transition-colors ${
-                isRecording ? "px-2.5 text-red-600" : "w-11 md:w-10 text-muted hover:text-pastel-ink"
-              }`}
+              onClick={() => scrollToBottom("auto")}
+              className="absolute bottom-full left-1/2 z-10 mb-3 -translate-x-1/2 border border-border-strong bg-ink px-3 py-2 font-mono text-[11px] uppercase tracking-[0.1em] text-surface shadow-lg transition-all duration-150 hover:-translate-y-px hover:bg-ink/90"
+              aria-label="Jump to latest message"
             >
-              {isRecording ? (
-                <span className="flex items-center gap-1.5 font-mono text-[11px]">
-                  <span className="w-2.5 h-2.5 bg-red-600 inline-block" />
-                  {fmtRec(recordSeconds)}
-                </span>
-              ) : (
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  width="16" height="16" viewBox="0 0 24 24"
-                  fill="none" stroke="currentColor" strokeWidth="2"
-                  strokeLinecap="round" strokeLinejoin="round"
-                >
-                  <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
-                  <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-                  <line x1="12" y1="19" x2="12" y2="23" />
-                  <line x1="8" y1="23" x2="16" y2="23" />
-                </svg>
-              )}
+              new messages
             </button>
-            <textarea
-              ref={textareaRef}
-              value={body}
-              onChange={handleBodyChange}
-              onKeyDown={handleKeyDown}
-              onPaste={handlePaste}
-              onFocus={() => setComposerFocused(true)}
-              onBlur={() => setComposerFocused(false)}
-              placeholder="message"
-              rows={1}
-              className="flex-1 min-h-[44px] md:min-h-[40px] max-h-[72px] border-none bg-transparent px-2.5 py-[10px] font-sans text-base md:text-[13.5px] leading-[1.45] text-ink placeholder:text-muted resize-none outline-none overflow-y-auto"
-              onInput={(e) => {
-                const t = e.currentTarget;
-                t.style.height = "auto";
-                t.style.height = `${Math.min(t.scrollHeight, 72)}px`;
-              }}
-            />
-            <button
-              // Keep the textarea focused so the mobile keyboard stays open.
-              // iOS fires (and focuses on) mousedown/pointerdown — preventing
-              // their default stops the button stealing focus, so the input
-              // never blurs. (preventDefault here doesn't cancel the click.)
-              onMouseDown={(e) => e.preventDefault()}
-              onPointerDown={(e) => e.preventDefault()}
-              onClick={handleSend}
-              disabled={!canSend}
-              className={`h-11 md:h-10 px-4 flex-shrink-0 font-mono text-[11px] uppercase tracking-[0.1em] border-none transition-all duration-200 ${
-                canSend
-                  ? "bg-ink text-surface cursor-pointer hover:-translate-y-px"
-                  : "bg-border text-muted-2 cursor-not-allowed"
-              }`}
-            >
-              send
-            </button>
-          </div>
-        )}
-
-        {/* Typing indicator */}
-        {typingUsers.length > 0 && (
-          <div className="flex items-center gap-1.5 mt-1.5 h-5">
-            <div className="flex">
-              {typingUsers.slice(0, 3).map((t, i) => (
-                <Avatar
-                  key={t.id}
-                  userId={t.id}
-                  name={t.name}
-                  size={20}
-                  expression={thinking}
-                  className={i === 0 ? "" : "-ml-1.5"}
-                />
-              ))}
+          ) : null
+        }
+        footer={
+          typingUsers.length > 0 ? (
+            <div className="flex items-center gap-1.5 mt-1.5 h-5">
+              <div className="flex">
+                {typingUsers.slice(0, 3).map((t, i) => (
+                  <Avatar key={t.id} userId={t.id} name={t.name} size={20} expression={thinking} className={i === 0 ? "" : "-ml-1.5"} />
+                ))}
+              </div>
+              <p className="font-mono text-[10px] text-muted">
+                {typingUsers.length === 1
+                  ? `${typingUsers[0].name} is typing…`
+                  : `${typingUsers.slice(0, -1).map((t) => t.name).join(", ")} and ${typingUsers.at(-1)?.name} are typing…`}
+              </p>
             </div>
-            <p className="font-mono text-[10px] text-muted">
-              {typingUsers.length === 1
-                ? `${typingUsers[0].name} is typing…`
-                : `${typingUsers
-                    .slice(0, -1)
-                    .map((t) => t.name)
-                    .join(", ")} and ${typingUsers.at(-1)?.name} are typing…`}
-            </p>
-          </div>
-        )}
-
-        {/* Composer hint */}
-        {!isDone && (
-          <div className="flex items-center justify-between mt-1.5">
-            <span className="font-mono text-[10px] text-muted-2">
-              ⏎ send · ⇧⏎ newline · @ mention
-            </span>
-            <span className="font-mono text-[10px] text-muted-2 flex items-center gap-1">
-              <span
-                className="w-[5px] h-[5px] rounded-full"
-                style={{
-                  background: "var(--pastel-deep)",
-                  animation: "pulseDot 2s ease-in-out infinite",
-                }}
-              />
-              live
-            </span>
-          </div>
-        )}
-      </div>
+          ) : null
+        }
+      />
     </div>
   );
 }

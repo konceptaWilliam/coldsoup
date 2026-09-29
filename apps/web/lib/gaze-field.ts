@@ -78,31 +78,31 @@ export function createGazeField(
   let raf = 0;
   let last = 0;
 
-  const visibleBlobs = () => {
-    const vh = window.innerHeight;
-    return Array.from(root.querySelectorAll<SVGSVGElement>("svg")).filter((svg) => {
-      if (!svg.querySelector(".mo-eyes")) return false;
-      const r = svg.getBoundingClientRect();
-      return r.width > 0 && r.bottom > 0 && r.top < vh;
-    });
-  };
-
   const paint = () => {
+    const vh = window.innerHeight;
     const t = target.getBoundingClientRect();
     const to = { x: t.left + t.width / 2, y: t.top + t.height / 2 };
-    for (const svg of visibleBlobs()) {
+
+    // Pass 1: all layout reads.
+    const jobs: { svg: SVGSVGElement; eyes: SVGElement; face: Face; aim: Point }[] = [];
+    root.querySelectorAll<SVGSVGElement>("svg").forEach((svg) => {
+      const eyes = svg.querySelector<SVGElement>(".mo-eyes");
+      if (!eyes) return;
+      const r = svg.getBoundingClientRect();
+      if (!(r.width > 0 && r.bottom > 0 && r.top < vh)) return;
       let face = faces.get(svg);
       if (face === undefined) {
         face = survey(svg);
         faces.set(svg, face);
       }
-      const eyes = svg.querySelector<SVGElement>(".mo-eyes");
-      if (!face || !eyes) continue;
-      const r = svg.getBoundingClientRect();
-      const aim = aimVector({ x: r.left + r.width / 2, y: r.top + r.height / 2 }, to);
-      for (const [k, v] of Object.entries(eyeVars(face, aim, amount, travel))) {
-        eyes.style.setProperty(k, v);
-      }
+      if (!face) return;
+      jobs.push({ svg, eyes, face, aim: aimVector({ x: r.left + r.width / 2, y: r.top + r.height / 2 }, to) });
+    });
+
+    // Pass 2: all style writes (no reads in between, so no forced reflows).
+    for (const { svg, eyes, face, aim } of jobs) {
+      const vars = eyeVars(face, aim, amount, travel);
+      Object.keys(vars).forEach((k) => eyes.style.setProperty(k, vars[k]));
       // Stand the idle glance down while we hold the eyes (see gaze.css).
       svg.style.setProperty("--mo-track-hold", amount.toFixed(3));
       touched.add(svg);

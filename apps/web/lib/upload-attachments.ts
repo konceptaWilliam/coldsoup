@@ -1,5 +1,5 @@
 import { createClient } from "@/lib/supabase/client";
-import { resizeImageIfNeeded, attachmentTypeFor } from "@/lib/file-utils";
+import { resizeImageIfNeeded, attachmentTypeFor, mediaDimensions } from "@/lib/file-utils";
 import type { Attachment } from "./thread-types";
 
 // Raw XHR against the storage REST endpoint — supabase-js upload() exposes
@@ -38,9 +38,13 @@ export async function uploadAttachments(
   const user = session?.user;
   if (!session || !user) throw new Error("Not authenticated");
 
-  // Resize first so progress is measured against the bytes actually sent.
+  // Resize first so progress is measured against the bytes actually sent;
+  // measure the resized file so the stored box matches what renders.
   const prepared = await Promise.all(
-    files.map(async (raw) => ({ raw, file: await resizeImageIfNeeded(raw) })),
+    files.map(async (raw) => {
+      const file = await resizeImageIfNeeded(raw);
+      return { raw, file, dims: await mediaDimensions(file) };
+    }),
   );
   const totalBytes = prepared.reduce((s, p) => s + p.file.size, 0) || 1;
   const loadedBytes = prepared.map(() => 0);
@@ -51,7 +55,7 @@ export async function uploadAttachments(
   const baseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
   return Promise.all(
-    prepared.map(async ({ raw, file }, i) => {
+    prepared.map(async ({ raw, file, dims }, i) => {
       const ext = file.name.split(".").pop() ?? "bin";
       const path = `${user.id}/${crypto.randomUUID()}.${ext}`;
       await xhrUpload(
@@ -76,6 +80,7 @@ export async function uploadAttachments(
         url: publicUrl,
         type: attachmentTypeFor(raw),
         name: raw.name,
+        ...(dims ?? {}),
       };
     }),
   );

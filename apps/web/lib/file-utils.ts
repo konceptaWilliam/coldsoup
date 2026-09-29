@@ -110,3 +110,58 @@ export async function resizeImageIfNeeded(file: File): Promise<File> {
     img.src = objectUrl;
   });
 }
+
+const MAX_DIMENSION = 20000;
+
+function validDims(width: number, height: number): { width: number; height: number } | null {
+  return width > 0 && height > 0 && width <= MAX_DIMENSION && height <= MAX_DIMENSION
+    ? { width: Math.round(width), height: Math.round(height) }
+    : null;
+}
+
+/** Intrinsic width/height of an image or video file, or null if unknown. */
+export async function mediaDimensions(file: File): Promise<{ width: number; height: number } | null> {
+  try {
+    if (file.type.startsWith("image/")) {
+      if (typeof createImageBitmap === "function") {
+        const bmp = await createImageBitmap(file);
+        const dims = validDims(bmp.width, bmp.height);
+        bmp.close();
+        return dims;
+      }
+      return await new Promise((resolve) => {
+        const url = URL.createObjectURL(file);
+        const img = new Image();
+        img.onload = () => {
+          URL.revokeObjectURL(url);
+          resolve(validDims(img.naturalWidth, img.naturalHeight));
+        };
+        img.onerror = () => {
+          URL.revokeObjectURL(url);
+          resolve(null);
+        };
+        img.src = url;
+      });
+    }
+    if (file.type.startsWith("video/")) {
+      return await new Promise((resolve) => {
+        const url = URL.createObjectURL(file);
+        const video = document.createElement("video");
+        video.preload = "metadata";
+        const done = (dims: { width: number; height: number } | null) => {
+          clearTimeout(timer);
+          URL.revokeObjectURL(url);
+          video.removeAttribute("src");
+          resolve(dims);
+        };
+        const timer = setTimeout(() => done(null), 3000);
+        video.onloadedmetadata = () => done(validDims(video.videoWidth, video.videoHeight));
+        video.onerror = () => done(null);
+        video.src = url;
+      });
+    }
+  } catch {
+    // Unsupported format (e.g. HEIC in some browsers) — send without dimensions.
+  }
+  return null;
+}
