@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { useRouter } from "next/navigation";
+import { navigate as shellNavigate } from "@/lib/shell-route";
 import { trpc } from "@/lib/trpc/client";
 import { StatusBadge } from "./status-badge";
 
@@ -38,7 +38,6 @@ export function SearchDialog({ onClose }: { onClose: () => void }) {
   const [selectedThreadId, setSelectedThreadId] = useState<string>("");
   const [focused, setFocused] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
-  const router = useRouter();
 
   useEffect(() => { inputRef.current?.focus(); }, []);
 
@@ -85,10 +84,10 @@ export function SearchDialog({ onClose }: { onClose: () => void }) {
       const item = items[idx];
       if (!item) return;
       const url = `/g/${item.groupId}/t/${item.threadId}${item.messageId ? `?highlight=${item.messageId}` : ""}`;
-      router.push(url);
+      shellNavigate(url);
       onClose();
     },
-    [items, router, onClose]
+    [items, onClose]
   );
 
   useEffect(() => {

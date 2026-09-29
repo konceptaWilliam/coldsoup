@@ -2,6 +2,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, protectedProcedure } from "../trpc";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { toGroupList, GROUP_LIST_SELECT } from "@/lib/group-list";
 
 async function assertGroupAdmin(groupId: string, userId: string) {
   const admin = createAdminClient();
@@ -22,7 +23,7 @@ export const groupsRouter = router({
 
     const { data, error } = await supabase
       .from("group_memberships")
-      .select("group_id, role, sort_order, groups(id, name, created_at)")
+      .select(GROUP_LIST_SELECT)
       .eq("user_id", profile.id)
       // Caller's chosen order; never-reordered groups fall to the bottom.
       .order("sort_order", { ascending: true, nullsFirst: false });
@@ -31,9 +32,7 @@ export const groupsRouter = router({
       throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: error.message });
     }
 
-    return (data ?? [])
-      .map((m) => ({ ...(m.groups as unknown as { id: string; name: string; created_at: string }), myRole: m.role }))
-      .filter((g) => g.id) as Array<{ id: string; name: string; created_at: string; myRole: string }>;
+    return toGroupList(data ?? []);
   }),
 
   // Persist the caller's sidebar group order. Only touches the caller's own

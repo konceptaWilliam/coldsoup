@@ -5,32 +5,30 @@ import { createAdminClient } from "@/lib/supabase/admin";
 export default async function RootPage() {
   const supabase = await createClient();
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // Middleware already did a real getUser() for this document request.
+  const { data: claimsData } = await supabase.auth.getClaims();
+  const userId = claimsData?.claims?.sub as string | undefined;
 
-  if (!user) {
+  if (!userId) {
     redirect("/login");
   }
 
   const admin = createAdminClient();
 
-  // Use admin client to bypass RLS for the profile existence check
-  const { data: profile } = await admin
-    .from("profiles")
-    .select("id")
-    .eq("id", user!.id)
-    .single();
+  // Admin client bypasses RLS for the profile existence check.
+  const [{ data: profile }, { data: memberships }] = await Promise.all([
+    admin.from("profiles").select("id").eq("id", userId).single(),
+    admin
+      .from("group_memberships")
+      .select("group_id")
+      .eq("user_id", userId)
+      .order("sort_order", { ascending: true, nullsFirst: false })
+      .limit(1),
+  ]);
 
   if (!profile) {
     redirect("/onboarding");
   }
-
-  const { data: memberships } = await admin
-    .from("group_memberships")
-    .select("group_id")
-    .eq("user_id", user.id)
-    .limit(1);
 
   if (memberships && memberships.length > 0) {
     redirect(`/g/${memberships[0].group_id}`);

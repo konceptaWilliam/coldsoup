@@ -240,7 +240,7 @@ export const profileRouter = router({
   }),
 
   sendPasswordChangedEmail: protectedProcedure.mutation(async ({ ctx }) => {
-    const { profile } = ctx;
+    const profile = await ctx.getProfile();
     const resend = new Resend(process.env.RESEND_API_KEY);
     try {
       await resend.emails.send({

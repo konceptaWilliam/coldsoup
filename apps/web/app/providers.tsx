@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import { QueryClient } from "@tanstack/react-query";
 import { PersistQueryClientProvider, removeOldestQuery } from "@tanstack/react-query-persist-client";
 import { createSyncStoragePersister } from "@tanstack/query-sync-storage-persister";
-import { httpBatchLink, loggerLink } from "@trpc/client";
+import { httpBatchStreamLink, httpLink, loggerLink, splitLink } from "@trpc/client";
 import { getQueryKey } from "@trpc/react-query";
 import superjson from "superjson";
 
@@ -98,15 +98,29 @@ export function Providers({ children }: { children: React.ReactNode }) {
             process.env.NODE_ENV === "development" ||
             (opts.direction === "down" && opts.result instanceof Error),
         }),
-        httpBatchLink({
-          transformer: superjson,
-          url: `${getBaseUrl()}/api/trpc`,
-          fetch: diagnosticFetch,
-          headers() {
-            return {
-              "x-trpc-source": "react",
-            };
-          },
+        // links.unfurl can take seconds (remote fetch); keep it out of the
+        // batch. Everything else streams, so each procedure's result lands as
+        // soon as it's ready instead of waiting for the slowest one.
+        splitLink({
+          condition: (op) => op.path === "links.unfurl",
+          true: httpLink({
+            transformer: superjson,
+            url: `${getBaseUrl()}/api/trpc`,
+            fetch: diagnosticFetch,
+            headers() {
+              return { "x-trpc-source": "react" };
+            },
+          }),
+          false: httpBatchStreamLink({
+            transformer: superjson,
+            url: `${getBaseUrl()}/api/trpc`,
+            // The streaming link reads res.body directly, so diagnosticFetch's
+            // res.json() override is inert here (harmless to keep).
+            fetch: diagnosticFetch,
+            headers() {
+              return { "x-trpc-source": "react" };
+            },
+          }),
         }),
       ],
     })

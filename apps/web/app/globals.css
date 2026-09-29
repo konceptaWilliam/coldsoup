@@ -62,6 +62,22 @@ html[data-theme="dark"] {
   box-sizing: border-box;
 }
 
+/* Native-feeling taps: no grey flash (components draw their own :active
+   state) and no double-tap-zoom delay on controls. */
+html {
+  -webkit-tap-highlight-color: transparent;
+}
+a,
+button,
+[role="button"],
+[role="link"],
+input,
+textarea,
+select,
+label {
+  touch-action: manipulation;
+}
+
 body {
   color: var(--foreground);
   background: var(--background);

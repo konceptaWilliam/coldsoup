@@ -107,7 +107,7 @@ export const invitesRouter = router({
           <div style="font-family: system-ui, sans-serif; max-width: 480px; margin: 0 auto; padding: 40px 24px; color: #1A1A18;">
             <h1 style="font-size: 20px; font-weight: 600; margin-bottom: 8px;">You're invited</h1>
             <p style="color: #6B6A65; margin-bottom: 24px;">
-              ${profile.display_name} has invited you to join <strong>coldsoup</strong>.
+              ${(await ctx.getProfile()).display_name} has invited you to join <strong>coldsoup</strong>.
             </p>
             <a href="${inviteUrl}" style="display: inline-block; background: #1A1A18; color: #F7F6F2; padding: 12px 24px; text-decoration: none; font-size: 14px; font-weight: 500;">
               Accept &amp; join

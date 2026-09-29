@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
+import { navigate } from "@/lib/shell-route";
 import { SearchDialog } from "./search-dialog";
 import { Avatar } from "./avatar";
 import { useMobileSidebar } from "@/lib/mobile-sidebar-context";
@@ -13,7 +14,6 @@ import { createClient, setRealtimeAuth } from "@/lib/supabase/client";
 type Group = { id: string; name: string };
 
 export function CreateGroupModal({ onClose }: { onClose: () => void }) {
-  const router = useRouter();
   const utils = trpc.useUtils();
   const [name, setName] = useState("");
   const [emails, setEmails] = useState("");
@@ -59,7 +59,7 @@ export function CreateGroupModal({ onClose }: { onClose: () => void }) {
       setStep("done");
     } else {
       onClose();
-      router.push(`/g/${group.id}`);
+      navigate(`/g/${group.id}`);
     }
   }
 
@@ -205,7 +205,6 @@ function GroupNav({
   pathname: string;
   onNavigate: () => void;
 }) {
-  const router = useRouter();
   const utils = trpc.useUtils();
   const reorder = trpc.groups.reorder.useMutation({
     onError: () => utils.groups.list.invalidate(),
@@ -337,7 +336,7 @@ function GroupNav({
     // The window handler persists/ends an actual drag; here we only resolve a
     // plain tap into navigation.
     if (!didDragRef.current && !cancelTapRef.current) {
-      router.push(`/g/${id}`);
+      navigate(`/g/${id}`);
       onNavigate();
     }
   }
@@ -373,14 +372,14 @@ function GroupNav({
             onKeyDown={(e) => {
               if (e.key === "Enter" || e.key === " ") {
                 e.preventDefault();
-                router.push(href);
+                navigate(href);
                 onNavigate();
               }
             }}
             className={`group/row flex items-center justify-between w-full px-2.5 py-[11px] md:py-[7px] my-px font-mono text-[13px] select-none cursor-pointer transition-all duration-150 ${
               isActive
                 ? "bg-pastel-tint text-pastel-ink border border-pastel-deep font-semibold"
-                : "text-ink border border-transparent hover:bg-border/50"
+                : "text-ink border border-transparent hover:bg-border/50 active:bg-border/60 active:transition-none"
             } ${isDragging ? "opacity-80 bg-border/60 border-border-strong shadow-sm scale-[1.01]" : ""}`}
             style={{ touchAction: dragId ? "none" : "manipulation" }}
           >
