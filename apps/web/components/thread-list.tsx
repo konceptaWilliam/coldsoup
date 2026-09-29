@@ -1,8 +1,8 @@
 "use client";
 
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
-import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { navigate } from "@/lib/shell-route";
+import { useShellRoute } from "@/lib/use-shell-route";
 import { trpc } from "@/lib/trpc/client";
 import { createClient } from "@/lib/supabase/client";
 import { StatusBadge } from "./status-badge";
@@ -357,7 +357,7 @@ function GroupInfoModal({ groupId, groupName, onClose }: { groupId: string; grou
 }
 
 export function ThreadList({ groupId, groupName }: { groupId: string; groupName: string }) {
-  const pathname = usePathname();
+  const { threadId: activeThreadId } = useShellRoute();
   const [showNewThread, setShowNewThread] = useState(false);
   const [showGroupInfo, setShowGroupInfo] = useState(false);
   const [showCalendar, setShowCalendar] = useState(false);
@@ -380,9 +380,6 @@ export function ThreadList({ groupId, groupName }: { groupId: string; groupName:
     [utils],
   );
 
-  // On mobile, hide thread list when a thread is open so the detail takes full width
-  const isOnThread = /\/t\//.test(pathname);
-
   const { data: rawThreads = [], isLoading } = trpc.threads.list.useQuery(
     { groupId },
     { refetchOnWindowFocus: false }
@@ -395,6 +392,21 @@ export function ThreadList({ groupId, groupName }: { groupId: string; groupName:
     const all = sortThreads(threads);
     return filter === "ALL" ? all : all.filter((thread) => thread.status === filter);
   }, [threads, filter]);
+
+  // Warm the first few threads while idle so the likeliest taps open with
+  // messages already in cache.
+  useEffect(() => {
+    if (threads.length === 0) return;
+    const top = sortThreads(threads).slice(0, 5).map((t) => t.id);
+    const run = () => top.forEach(prefetchThread);
+    if (typeof window.requestIdleCallback === "function") {
+      const id = window.requestIdleCallback(run, { timeout: 2000 });
+      return () => window.cancelIdleCallback(id);
+    }
+    const timer = setTimeout(run, 300);
+    return () => clearTimeout(timer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rawThreads, prefetchThread]);
 
   const filterOptions: Array<{ key: ThreadFilter; label: string }> = [
     { key: "ALL", label: "All" },
@@ -421,7 +433,7 @@ export function ThreadList({ groupId, groupName }: { groupId: string; groupName:
     for (const thread of threads) s[thread.id] = getLastSeen(thread.id) || Date.now();
     return s;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rawThreads, pathname]);
+  }, [rawThreads, activeThreadId]);
 
   const { data: serverCounts } = trpc.threads.unreadCounts.useQuery(
     { groupId, since },
@@ -463,11 +475,7 @@ export function ThreadList({ groupId, groupName }: { groupId: string; groupName:
   }, [groupId, utils]);
 
   return (
-    <section
-      className={`${
-        isOnThread ? "hidden md:flex" : "flex"
-      } flex-col w-full md:w-[336px] flex-shrink-0 border-r border-border h-full`}
-    >
+    <section className="flex flex-col w-full md:w-[336px] flex-shrink-0 border-r border-border h-full bg-surface">
       {showGroupInfo && <GroupInfoModal groupId={groupId} groupName={groupName} onClose={() => setShowGroupInfo(false)} />}
       {/* Header */}
       <header className="px-3 md:px-[18px] pt-2 md:pt-[14px] pb-2 md:pb-[10px] border-b border-border">
@@ -559,7 +567,7 @@ export function ThreadList({ groupId, groupName }: { groupId: string; groupName:
         ) : (
           sorted.map((thread) => {
             const href = `/g/${groupId}/t/${thread.id}`;
-            const isActive = pathname === href;
+            const isActive = thread.id === activeThreadId;
             const isDone = thread.status === "DONE";
             const lastMessage = thread.messages?.[thread.messages.length - 1];
             const lastAuthor = lastMessage?.profiles?.display_name?.split(" ")[0];
@@ -580,12 +588,19 @@ export function ThreadList({ groupId, groupName }: { groupId: string; groupName:
             const dimRead = !isActive && !isDone && unread === 0;
 
             return (
-              <Link
+              <a
                 key={thread.id}
                 href={href}
+                onPointerDown={() => prefetchThread(thread.id)}
                 onMouseEnter={() => prefetchThread(thread.id)}
                 onFocus={() => prefetchThread(thread.id)}
-                className={`block py-3 border-b border-border transition-all duration-150 ${
+                onClick={(e) => {
+                  // Keep new-tab / modified clicks native.
+                  if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+                  e.preventDefault();
+                  navigate(href);
+                }}
+                className={`block py-3 border-b border-border transition-all duration-150 active:bg-border/50 active:transition-none ${
                   isDone ? "opacity-35" : dimRead ? "opacity-60" : ""
                 } ${isActive ? "bg-pastel-tint/60" : "[@media(hover:hover)]:hover:bg-border/30"}`}
                 style={{
@@ -676,7 +691,7 @@ export function ThreadList({ groupId, groupName }: { groupId: string; groupName:
                     </span>
                   </div>
                 )}
-              </Link>
+              </a>
             );
           })
         )}
