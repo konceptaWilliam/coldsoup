@@ -26,33 +26,16 @@ import { BlobForm } from "@/components/blob-form";
 import { BlobLevel } from "@/components/blob-level";
 import { EvolveModal, evolveSpec, type RevealSpec } from "@/components/evolve-modal";
 import { isShape } from "@/lib/blob-evolution";
-
-type ThreadStatus = "OPEN" | "URGENT" | "DONE";
-
-type Attachment = {
-  url: string;
-  type: "image" | "audio" | "video" | "file";
-  name: string;
-};
-
-type Reaction = {
-  type: string;
-  count: number;
-  userReacted: boolean;
-  users: string[];
-};
-
-type ReactionType = "👍" | "👎" | "❤️" | "🎉" | "😂" | "❓";
-const REACTION_TYPES: ReactionType[] = ["👍", "👎", "❤️", "🎉", "😂", "❓"];
-
-type ReplyTo = {
-  id: string;
-  body: string;
-  author_name: string;
-  // Specific image of the replied-to message, when the reply was started from
-  // an image. Null for text replies / non-image messages.
-  image_url: string | null;
-};
+import {
+  REACTION_DEFAULTS,
+  REACTION_TYPES,
+  type Attachment,
+  type Message,
+  type PollData,
+  type ReactionType,
+  type ReplyTo,
+  type ThreadStatus,
+} from "@/lib/thread-types";
 
 // Message context needed to start a reply from an image (lightbox / hold menu).
 // The specific image url is supplied at reply time (the lightbox can swipe to a
@@ -61,60 +44,6 @@ type ReplyTarget = {
   id: string;
   body: string;
   authorName: string;
-};
-
-const REACTION_DEFAULTS: Reaction[] = REACTION_TYPES.map((type) => ({
-  type,
-  count: 0,
-  userReacted: false,
-  users: [],
-}));
-
-type PollVoter = {
-  id: string;
-  display_name: string;
-  avatar_url: string | null;
-};
-
-type PollOption = {
-  id: string;
-  text: string;
-  vote_count: number;
-  user_voted: boolean;
-  voters: PollVoter[];
-};
-
-type PollData = {
-  id: string;
-  question: string;
-  options: PollOption[];
-};
-
-type Message = {
-  id: string;
-  body: string;
-  created_at: string;
-  edited_at: string | null;
-  is_deleted: boolean;
-  user_id: string | null;
-  thread_id: string;
-  client_id?: string | null;
-  poll_id: string | null;
-  poll: PollData | null;
-  smeter_id: string | null;
-  smeter: SMeterSummary | null;
-  system_event: SystemEvent | null;
-  attachments: Attachment[];
-  reactions: Reaction[];
-  reply_to_id: string | null;
-  reply_to: ReplyTo | null;
-  profiles: {
-    id: string;
-    display_name: string;
-    avatar_url: string | null;
-  } | null;
-  delivery_status?: "sending" | "failed";
-  fail_id?: string;
 };
 
 type FailedEntry = {
