@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import { trpc } from "@/lib/trpc/client";
-import { useRouter } from "next/navigation";
+import { navigate } from "@/lib/shell-route";
 
 export function NewThreadDialog({
   groupId,
@@ -13,14 +13,13 @@ export function NewThreadDialog({
 }) {
   const [title, setTitle] = useState("");
   const [dueDate, setDueDate] = useState<string | null>(null);
-  const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
   const utils = trpc.useUtils();
 
   const createThread = trpc.threads.create.useMutation({
     onSuccess: (thread) => {
       utils.threads.list.invalidate({ groupId });
-      router.push(`/g/${groupId}/t/${thread.id}`);
+      navigate(`/g/${groupId}/t/${thread.id}`);
       onClose();
     },
   });
