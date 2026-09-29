@@ -14,7 +14,7 @@ import { SWIPE_EDGE_PX } from "@/lib/swipe";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import { trpc } from "@/lib/trpc/client";
 import { createClient, getPresenceClient } from "@/lib/supabase/client";
-import { useUnread } from "@/lib/unread-context";
+import { useUnreadActions } from "@/lib/unread-context";
 import { useOnline } from "@/lib/presence-context";
 import { validateFile } from "@/lib/file-utils";
 import { haptic } from "@/lib/haptics";
@@ -45,6 +45,9 @@ type ProfileTarget = {
 
 const DRAFT_PREFIX = "coldsoup:draft:";
 const BOTTOM_THRESHOLD_PX = 120;
+// Stable empty defaults so memos keyed on them don't recompute every render.
+const EMPTY_MEMBERS: { id: string; display_name: string; avatar_url: string | null; role: string }[] = [];
+const EMPTY_RECEIPTS: never[] = [];
 
 function isScrolledNearBottom(container: HTMLElement): boolean {
   return (
@@ -1384,7 +1387,7 @@ export function ThreadDetail({
   const composerRef = useRef<HTMLDivElement>(null);
   const composerTouchYRef = useRef<number | null>(null);
   const utils = trpc.useUtils();
-  const { markRead } = useUnread();
+  const { markRead } = useUnreadActions();
   const [reveal, setReveal] = useState<RevealSpec | null>(null);
   const myBlob = useBlob(myInfo?.id);
   const setBlobForm = trpc.profile.setBlobForm.useMutation({
@@ -1421,7 +1424,7 @@ export function ThreadDetail({
     onError: () => setThreadStatus("DONE"),
     onSettled: () => utils.threads.list.invalidate({ groupId }),
   });
-  const { data: readReceipts = [] } = trpc.threads.reads.useQuery(
+  const { data: readReceipts = EMPTY_RECEIPTS } = trpc.threads.reads.useQuery(
     { threadId },
     { enabled: !!threadId },
   );
@@ -2455,7 +2458,7 @@ export function ThreadDetail({
   const isDone = threadStatus === "DONE";
   const canSend = !isDone && (body.trim().length > 0 || pendingFiles.length > 0);
 
-  const members = workspaceMembers ?? [];
+  const members = workspaceMembers ?? EMPTY_MEMBERS;
   const mentions = useMemo(() => buildMentionMatcher(members, MENTION_SPECIALS), [members]);
   // Past this size, enable content-visibility windowing on message rows.
   const bigThread = displayMessages.length > 60;
