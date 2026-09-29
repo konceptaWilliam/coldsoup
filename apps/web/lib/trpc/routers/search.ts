@@ -50,23 +50,20 @@ export const searchRouter = router({
         if (!t) return { threads: [], messages: [] };
         threadIds = [input.threadId];
       } else {
-        // Search thread titles
-        const { data, error: te } = await admin
-          .from("threads")
-          .select("id, title, status, group_id, groups(name)")
-          .in("group_id", groupIds)
-          .ilike("title", pattern)
-          .order("updated_at", { ascending: false })
-          .limit(8);
+        // Title search and the message-search scope are independent.
+        const [{ data, error: te }, { data: allThreads }] = await Promise.all([
+          admin
+            .from("threads")
+            .select("id, title, status, group_id, groups(name)")
+            .in("group_id", groupIds)
+            .ilike("title", pattern)
+            .order("updated_at", { ascending: false })
+            .limit(8),
+          admin.from("threads").select("id").in("group_id", groupIds),
+        ]);
 
         if (te) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: te.message });
         threads = data ?? [];
-
-        // All thread IDs in scope for message search
-        const { data: allThreads } = await admin
-          .from("threads")
-          .select("id")
-          .in("group_id", groupIds);
         threadIds = (allThreads ?? []).map((t) => t.id);
       }
 
