@@ -1,6 +1,6 @@
 "use client";
 
-import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useMobileSidebar } from "@/lib/mobile-sidebar-context";
 import { consumeInternalBack, navigateBack } from "@/lib/shell-route";
 import { shouldCommitSwipe, SWIPE_EDGE_PX, SWIPE_LOCK_PX } from "@/lib/swipe";
@@ -48,6 +48,33 @@ export function ShellStack({
   const dragRef = useRef<Drag | null>(null);
   const sidebarSwipeRef = useRef<{ x: number; y: number } | null>(null);
   const prevThreadIdRef = useRef<string | null>(threadId);
+  // Last applied progress; lets a pop that arrives after the swipe already
+  // finished sliding end at once instead of waiting for a transitionend that
+  // an unchanged transform will never fire.
+  const progressRef = useRef(threadId ? 0 : 1);
+  // A close is under way: clear the rendered thread when it ends.
+  const closingRef = useRef(false);
+  // Fallback in case transitionend never arrives (cancelled, backgrounded).
+  const fallbackTimerRef = useRef<number | null>(null);
+
+  function clearFallback() {
+    if (fallbackTimerRef.current !== null) {
+      window.clearTimeout(fallbackTimerRef.current);
+      fallbackTimerRef.current = null;
+    }
+  }
+
+  function finishTransition() {
+    clearFallback();
+    setAnimating(false);
+    if (closingRef.current) {
+      closingRef.current = false;
+      setRenderedThreadId(null);
+    }
+    if (paneRef.current) paneRef.current.style.willChange = "";
+  }
+
+  useEffect(() => clearFallback, []);
 
   // progress: 0 = pane fully open, 1 = pane fully closed.
   function apply(progress: number, withTransition: boolean) {
@@ -55,6 +82,15 @@ export function ShellStack({
     const listEl = listRef.current;
     const dim = dimRef.current;
     if (!pane || !listEl || !dim) return;
+    const unchanged = progress === progressRef.current;
+    progressRef.current = progress;
+    if (withTransition && unchanged) {
+      // Already there, or already sliding there: let that transition end, or
+      // end now if nothing is running (no transitionend would fire).
+      if (fallbackTimerRef.current === null) finishTransition();
+      return;
+    }
+    clearFallback();
     const transition = withTransition
       ? `transform ${DURATION_MS}ms ${EASE}, opacity ${DURATION_MS}ms ${EASE}`
       : "none";
@@ -64,6 +100,9 @@ export function ShellStack({
     pane.style.transform = `translateX(${progress * 100}%)`;
     listEl.style.transform = `translateX(${-LIST_PARALLAX_PCT * (1 - progress)}%)`;
     dim.style.opacity = String(DIM_OPACITY * (1 - progress));
+    if (withTransition) {
+      fallbackTimerRef.current = window.setTimeout(finishTransition, DURATION_MS + 100);
+    }
   }
 
   // Initial position (deep link into a thread renders open, no slide).
@@ -79,9 +118,11 @@ export function ShellStack({
     const motion = isMobileLayout() && !reducedMotion();
 
     if (threadId) {
-      // Push (or thread→thread swap while open: no slide).
+      // Push (or thread→thread swap while open: no slide). Opening during a
+      // close cancels the close.
       setRenderedThreadId(threadId);
       if (!prev) {
+        closingRef.current = false;
         setAnimating(motion);
         apply(0, motion);
       }
@@ -92,17 +133,20 @@ export function ShellStack({
     // swipe-back, so only animate pops we started or that happen in the PWA.
     const internal = consumeInternalBack();
     const animate = motion && (isStandalone() || internal);
-    setAnimating(animate);
-    apply(1, animate);
-    if (!animate) setRenderedThreadId(null);
+    closingRef.current = true;
+    if (animate) {
+      setAnimating(true);
+      apply(1, true);
+    } else {
+      apply(1, false);
+      finishTransition();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [threadId]);
 
   function onTransitionEnd(e: React.TransitionEvent) {
     if (e.target !== paneRef.current || e.propertyName !== "transform") return;
-    setAnimating(false);
-    if (!threadId) setRenderedThreadId(null);
-    if (paneRef.current) paneRef.current.style.willChange = "";
+    finishTransition();
   }
 
   function onTouchStart(e: React.TouchEvent) {
@@ -178,6 +222,7 @@ export function ShellStack({
     const width = paneRef.current?.offsetWidth || window.innerWidth;
 
     if (shouldCommitSwipe({ dx, width, velocity })) {
+      closingRef.current = true;
       setAnimating(true);
       apply(1, true);
       if (groupId) navigateBack(`/g/${groupId}`);
