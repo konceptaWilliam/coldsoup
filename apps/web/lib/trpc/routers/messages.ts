@@ -402,7 +402,7 @@ export const messagesRouter = router({
           await postSystemMessage(admin, input.threadId, {
             kind: "blob_evolved",
             userId: profile.id,
-            userName: (profile.display_name as string | null) ?? "Someone",
+            userName: (await ctx.getProfile()).display_name ?? "Someone",
             level,
             shape: formShape(baseShapeOf(profile.id), level, null),
             shiny,

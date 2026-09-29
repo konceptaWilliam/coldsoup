@@ -10,6 +10,19 @@ function parseCookies(cookieHeader: string) {
   });
 }
 
+// Verifies mobile bearer tokens. One instance per process so the JWKS cache
+// (10 min TTL inside auth-js) survives across requests on a warm lambda.
+let anonClient: ReturnType<typeof createClient> | null = null;
+function getAnonClient() {
+  return (anonClient ??= createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    { auth: { persistSession: false, autoRefreshToken: false } }
+  ));
+}
+
+export type AuthUser = { id: string; email: string | null };
+
 export async function createContext({ req }: FetchCreateContextFnOptions) {
   const cookieHeader = req.headers.get("cookie") ?? "";
   const authHeader = req.headers.get("authorization") ?? "";
@@ -31,32 +44,38 @@ export async function createContext({ req }: FetchCreateContextFnOptions) {
         }
   );
 
-  let user: Awaited<ReturnType<typeof supabase.auth.getUser>>["data"]["user"] = null;
-
-  if (bearerToken) {
-    // For mobile: validate JWT directly
-    const anonClient = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-    );
-    const { data } = await anonClient.auth.getUser(bearerToken);
-    user = data.user;
-  } else {
-    const { data } = await supabase.auth.getUser();
-    user = data.user;
+  // getClaims() verifies the JWT locally against the project's ECC signing
+  // key (JWKS fetched once, then cached) instead of a network round trip to
+  // the Auth server on every request.
+  let user: AuthUser | null = null;
+  try {
+    const { data } = bearerToken
+      ? await getAnonClient().auth.getClaims(bearerToken)
+      : await supabase.auth.getClaims();
+    const claims = data?.claims;
+    if (claims?.sub) {
+      user = { id: claims.sub, email: (claims.email as string | undefined) ?? null };
+    }
+  } catch {
+    user = null;
   }
 
-  let profile: Profile | null = null;
-  if (user) {
-    const { data } = await supabase
-      .from("profiles")
-      .select("*")
-      .eq("id", user.id)
-      .single();
-    profile = data;
-  }
+  // Loaded only by procedures that need more than the user id.
+  let profilePromise: Promise<Profile | null> | null = null;
+  const getProfile = (): Promise<Profile | null> => {
+    if (!user) return Promise.resolve(null);
+    const userId = user.id;
+    return (profilePromise ??= (async () => {
+      const { data } = await supabase
+        .from("profiles")
+        .select("id, display_name, email, avatar_url, created_at")
+        .eq("id", userId)
+        .single();
+      return (data as Profile | null) ?? null;
+    })());
+  };
 
-  return { supabase, user, profile };
+  return { supabase, user, getProfile };
 }
 
 export type Profile = {

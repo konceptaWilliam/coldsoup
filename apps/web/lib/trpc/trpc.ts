@@ -10,14 +10,21 @@ export const router = t.router;
 export const publicProcedure = t.procedure;
 
 const enforceAuthed = t.middleware(({ ctx, next }) => {
-  if (!ctx.user || !ctx.profile) {
+  if (!ctx.user) {
     throw new TRPCError({ code: "UNAUTHORIZED" });
   }
+  const user = ctx.user;
   return next({
     ctx: {
       ...ctx,
-      user: ctx.user,
-      profile: ctx.profile,
+      user,
+      // Most procedures only need the id, which the verified JWT already has.
+      profile: { id: user.id },
+      getProfile: async () => {
+        const p = await ctx.getProfile();
+        if (!p) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Profile missing" });
+        return p;
+      },
     },
   });
 });

@@ -129,7 +129,7 @@ export const threadsRouter = router({
       if ((input.dueDate ?? null) !== previousDue) {
         await postSystemMessage(admin, input.threadId, {
           kind: "due_date",
-          actorName: profile.display_name,
+          actorName: (await ctx.getProfile()).display_name,
           dueDate: input.dueDate ?? null,
         });
       }
@@ -178,7 +178,7 @@ export const threadsRouter = router({
 
       await postSystemMessage(admin, input.threadId, {
         kind: "thread_renamed",
-        actorName: profile.display_name,
+        actorName: (await ctx.getProfile()).display_name,
         from: previousTitle,
         to: title,
       });
@@ -226,7 +226,7 @@ export const threadsRouter = router({
         throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: error.message });
       }
 
-      await postSystemMessage(admin, data.id, { kind: "thread_created", actorName: profile.display_name });
+      await postSystemMessage(admin, data.id, { kind: "thread_created", actorName: (await ctx.getProfile()).display_name });
 
       return data;
     }),
@@ -509,7 +509,7 @@ export const threadsRouter = router({
       if (fromStatus !== input.status) {
         await postSystemMessage(admin, input.threadId, {
           kind: "status",
-          actorName: profile.display_name,
+          actorName: (await ctx.getProfile()).display_name,
           from: fromStatus,
           to: input.status,
         });
