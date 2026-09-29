@@ -46,6 +46,9 @@ export function AppShell({
   // The server list is fresher than anything persisted from a previous session.
   useEffect(() => {
     utils.groups.list.setData(undefined, initialGroups);
+    // The page may have come from the service-worker cache, so its groups can
+    // be stale; refresh once in the background.
+    void utils.groups.list.invalidate();
   }, [utils, initialGroups]);
 
   useEffect(() => {

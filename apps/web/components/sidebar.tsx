@@ -2,14 +2,17 @@
 
 import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { usePathname } from "next/navigation";
 import { navigate } from "@/lib/shell-route";
-import { SearchDialog } from "./search-dialog";
 import { Avatar } from "./avatar";
 import { useMobileSidebar } from "@/lib/mobile-sidebar-context";
 import { setLastSeen } from "@/lib/unread-context";
 import { trpc } from "@/lib/trpc/client";
 import { createClient, setRealtimeAuth } from "@/lib/supabase/client";
+
+// Loaded on first open — keeps search out of the first-load bundle.
+const SearchDialog = dynamic(() => import("./search-dialog").then((m) => m.SearchDialog), { ssr: false });
 
 type Group = { id: string; name: string };
 
