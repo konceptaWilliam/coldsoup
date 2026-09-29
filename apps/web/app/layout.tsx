@@ -22,7 +22,10 @@ export const viewport: Viewport = {
   maximumScale: 1,
   userScalable: false,
   viewportFit: "cover",
-  themeColor: "#F2EFE8",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#F2EFE8" },
+    { media: "(prefers-color-scheme: dark)", color: "#1A1A18" },
+  ],
 };
 
 export const metadata: Metadata = {
@@ -50,7 +53,7 @@ export default function RootLayout({
             and the `coldsoup:themeMode` key. */}
         <script
           dangerouslySetInnerHTML={{
-            __html: `(function(){try{var m=localStorage.getItem('coldsoup:themeMode');var d=m==='dark'||((m==='system'||!m)&&window.matchMedia('(prefers-color-scheme: dark)').matches);var s=d?'dark':'light';document.documentElement.dataset.theme=s;document.documentElement.style.colorScheme=s;}catch(e){}})();`,
+            __html: `(function(){try{var m=localStorage.getItem('coldsoup:themeMode');var d=m==='dark'||((m==='system'||!m)&&window.matchMedia('(prefers-color-scheme: dark)').matches);var s=d?'dark':'light';document.documentElement.dataset.theme=s;document.documentElement.style.colorScheme=s;var c=d?'#1A1A18':'#F2EFE8';var f=function(){document.querySelectorAll('meta[name="theme-color"]').forEach(function(x){x.setAttribute('content',c)})};f();document.addEventListener('DOMContentLoaded',f);}catch(e){}})();`,
           }}
         />
       </head>
