@@ -19,25 +19,31 @@ import { useOnline } from "@/lib/presence-context";
 import { validateFile } from "@/lib/file-utils";
 import { haptic } from "@/lib/haptics";
 import { playSend, playReceive } from "@/lib/sound";
-import { SMeterCard, SMeterCreateModal, SMeterResultsLink, type SMeterSummary } from "@/components/smeter";
-import { systemEventText, type SystemEvent } from "@/lib/system-event";
+import { SMeterCard, SMeterCreateModal, type SMeterSummary } from "@/components/smeter";
 import { useBlob } from "@/lib/use-blob";
-import { BlobForm } from "@/components/blob-form";
 import { BlobLevel } from "@/components/blob-level";
 import { EvolveModal, evolveSpec, type RevealSpec } from "@/components/evolve-modal";
-import { isShape } from "@/lib/blob-evolution";
 import {
   REACTION_DEFAULTS,
   REACTION_TYPES,
   type Attachment,
   type Message,
-  type PollData,
   type ReplyTo,
   type ThreadStatus,
 } from "@/lib/thread-types";
 import { useThreadMessages } from "@/lib/use-thread-messages";
 import { flatten } from "@/lib/thread-cache";
 import { localPreview } from "@/lib/local-previews";
+import {
+  formatTime,
+  ImageGallery,
+  LinkPreview,
+  PollView,
+  renderBody,
+  SystemMessage,
+  ThreadImage,
+} from "@/components/thread/message-parts";
+import { buildMentionMatcher, mentionsUser, MENTION_SPECIALS } from "@/lib/mentions";
 
 // Message context needed to start a reply from an image (lightbox / hold menu).
 // The specific image url is supplied at reply time (the lightbox can swipe to a
@@ -86,221 +92,6 @@ function clearDraft(threadId: string) {
   try {
     localStorage.removeItem(draftKey(threadId));
   } catch {}
-}
-
-// Centered grey thread-event notice (no author bubble).
-function SystemMessage({ event, threadId }: { event: SystemEvent; threadId: string }) {
-  if (event.kind === "blob_evolved") {
-    const shiny = event.shiny;
-    return (
-      <div className="flex justify-center my-3 px-4">
-        <span
-          className={`inline-flex items-center gap-2 border px-2 py-1 font-mono text-[11px] leading-relaxed max-w-[85%] ${
-            shiny ? "border-accent text-ink bg-accent-light" : "border-dashed border-border-strong text-muted"
-          }`}
-        >
-          <BlobForm
-            name={event.userId}
-            look={{
-              shape: isShape(event.shape) ? event.shape : null,
-              finish: shiny ? "shiny" : event.level === 3 ? "holo" : "plain",
-            }}
-            size={22}
-          />
-          {systemEventText(event)}
-        </span>
-      </div>
-    );
-  }
-  return (
-    <div className="flex justify-center my-3 px-4">
-      <span className="font-mono text-[11px] text-muted text-center leading-relaxed max-w-[85%]">
-        {event.kind === "smeter_done" ? (
-          <>
-            The {event.smeterTitle ?? "S-meter"} s-meter is done.{" "}
-            <SMeterResultsLink smeterId={event.smeterId} threadId={threadId} />
-          </>
-        ) : (
-          systemEventText(event)
-        )}
-      </span>
-    </div>
-  );
-}
-
-function PollView({
-  poll: initialPoll,
-  myInfo,
-}: {
-  poll: PollData;
-  myInfo: {
-    id: string;
-    display_name: string;
-    avatar_url: string | null;
-  } | null;
-}) {
-  const [poll, setPoll] = useState(initialPoll);
-  const [newOptionText, setNewOptionText] = useState("");
-  const [showAddOption, setShowAddOption] = useState(false);
-
-  // Sync local state when the cached poll is patched (realtime refresh)
-  useEffect(() => {
-    setPoll(initialPoll);
-  }, [initialPoll]);
-
-  const vote = trpc.polls.vote.useMutation({
-    onMutate: ({ pollOptionId }) => {
-      const prev = poll;
-      setPoll((p) => ({
-        ...p,
-        options: p.options.map((o) =>
-          o.id !== pollOptionId
-            ? o
-            : {
-                ...o,
-                user_voted: !o.user_voted,
-                vote_count: o.user_voted ? o.vote_count - 1 : o.vote_count + 1,
-                voters: o.user_voted
-                  ? o.voters.filter((v) => v.id !== myInfo?.id)
-                  : myInfo
-                    ? [
-                        ...o.voters,
-                        {
-                          id: myInfo.id,
-                          display_name: myInfo.display_name,
-                          avatar_url: myInfo.avatar_url,
-                        },
-                      ]
-                    : o.voters,
-              },
-        ),
-      }));
-      return { prev };
-    },
-    onError: (_, __, ctx) => {
-      if (ctx?.prev) setPoll(ctx.prev);
-    },
-  });
-
-  const addOption = trpc.polls.addOption.useMutation({
-    onSuccess: () => {
-      setNewOptionText("");
-      setShowAddOption(false);
-    },
-  });
-
-  const totalVotes = poll.options.reduce((s, o) => s + o.vote_count, 0);
-
-  return (
-    <div className="mt-1 border border-border bg-surface p-3 w-full sm:max-w-[360px] shadow-lg">
-      <p className="font-mono text-[12px] font-semibold text-ink mb-1">
-        {poll.question}
-      </p>
-      <p className="font-mono text-[10px] text-muted mb-2">
-        {totalVotes} vote{totalVotes !== 1 ? "s" : ""}
-      </p>
-      <div className="space-y-2">
-        {poll.options.map((opt) => {
-          const pct =
-            totalVotes > 0
-              ? Math.round((opt.vote_count / totalVotes) * 100)
-              : 0;
-          return (
-            <div key={opt.id}>
-              <button
-                className="w-full text-left"
-                onClick={() => vote.mutate({ pollOptionId: opt.id })}
-              >
-                <div className="flex items-center justify-between mb-0.5">
-                  <span
-                    className={`font-mono text-[11px] ${opt.user_voted ? "text-ink font-semibold" : "text-ink"}`}
-                  >
-                    {opt.text}
-                  </span>
-                  <span className="font-mono text-[10px] text-muted ml-2 flex-shrink-0">
-                    {pct}%
-                  </span>
-                </div>
-                <div className="h-1 bg-surface-2 border border-border mb-1">
-                  <div
-                    className={`h-full ${opt.user_voted ? "bg-pastel" : "bg-pastel/60"}`}
-                    style={{ width: `${pct}%` }}
-                  />
-                </div>
-              </button>
-              {opt.voters.length > 0 ? (
-                <div className="flex flex-wrap gap-0.5">
-                  {opt.voters.map((v) => (
-                    <div
-                      key={v.id}
-                      title={v.display_name}
-                      className="flex items-center gap-1 border border-border px-1 py-0.5 sm:px-1"
-                    >
-                      <Avatar
-                        userId={v.id}
-                        name={v.display_name}
-                        size={16}
-                      />
-                      <span className="font-mono text-[10px] text-ink sm:hidden">
-                        {v.display_name}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <span className="font-mono text-[10px] text-muted-2">
-                  No votes
-                </span>
-              )}
-            </div>
-          );
-        })}
-      </div>
-      {showAddOption ? (
-        <form
-          className="flex gap-1.5 mt-3"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (!newOptionText.trim()) return;
-            addOption.mutate({ pollId: poll.id, text: newOptionText.trim() });
-          }}
-        >
-          <input
-            autoFocus
-            value={newOptionText}
-            onChange={(e) => setNewOptionText(e.target.value)}
-            maxLength={200}
-            placeholder="Option text…"
-            className="flex-1 border border-border bg-surface px-2 py-1 font-mono text-[12px] text-ink placeholder:text-muted focus:outline-none focus:border-ink"
-          />
-          <button
-            type="submit"
-            disabled={!newOptionText.trim() || addOption.isPending}
-            className="font-mono text-[10px] bg-ink text-surface px-2 py-1 disabled:opacity-40"
-          >
-            Add
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setShowAddOption(false);
-              setNewOptionText("");
-            }}
-            className="font-mono text-[10px] text-muted hover:text-ink px-1"
-          >
-            ×
-          </button>
-        </form>
-      ) : (
-        <button
-          onClick={() => setShowAddOption(true)}
-          className="mt-3 font-mono text-[10px] text-muted hover:text-ink transition-colors"
-        >
-          + add option
-        </button>
-      )}
-    </div>
-  );
 }
 
 function PollCreateModal({
@@ -418,14 +209,6 @@ function PollCreateModal({
   );
 }
 
-function formatTime(dateStr: string): string {
-  return new Date(dateStr).toLocaleTimeString("en-GB", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  });
-}
-
 function formatDate(dateStr: string): string {
   const d = new Date(dateStr);
   const today = new Date();
@@ -441,108 +224,9 @@ function formatDate(dateStr: string): string {
   });
 }
 
-const MENTION_SPECIALS = ["everyone", "here"];
-
 // Distinct haptic for an incoming @mention — a double pulse, clearly different
 // from the single `light` tap fired on send.
 const MENTION_HAPTIC: VibratePattern = [12, 30, 12];
-
-// True when `body` mentions this user by name, or via @everyone / @here.
-function mentionsUser(body: string, displayName: string): boolean {
-  if (!body) return false;
-  if (new RegExp(`@(${MENTION_SPECIALS.join("|")})(?!\\w)`).test(body)) return true;
-  const escaped = displayName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`@${escaped}(?!\\w)`).test(body);
-}
-
-const URL_RE = /https?:\/\/[^\s<]+/g;
-
-// Split a plain-text run into text + clickable <a> nodes for any http(s) URLs.
-// `keyBase` must be unique per run so the returned nodes get stable sibling keys.
-function linkify(text: string, keyBase: number): React.ReactNode[] {
-  const nodes: React.ReactNode[] = [];
-  let last = 0;
-  let i = 0;
-  let m: RegExpExecArray | null;
-  URL_RE.lastIndex = 0;
-  while ((m = URL_RE.exec(text)) !== null) {
-    let url = m[0];
-    // Don't let trailing sentence punctuation get pulled into the href.
-    const trail = url.match(/[.,!?;:)\]]+$/);
-    const trailing = trail ? trail[0] : "";
-    if (trailing) url = url.slice(0, url.length - trailing.length);
-    if (m.index > last) {
-      nodes.push(<span key={`${keyBase}-t${i++}`}>{text.slice(last, m.index)}</span>);
-    }
-    nodes.push(
-      <a
-        key={`${keyBase}-l${i++}`}
-        href={url}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="underline text-ink hover:opacity-70 break-all"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {url}
-      </a>,
-    );
-    if (trailing) {
-      nodes.push(<span key={`${keyBase}-p${i++}`}>{trailing}</span>);
-    }
-    last = m.index + m[0].length;
-  }
-  if (last < text.length) {
-    nodes.push(<span key={`${keyBase}-t${i++}`}>{text.slice(last)}</span>);
-  }
-  return nodes;
-}
-
-function renderBody(
-  body: string,
-  members: { id: string; display_name: string }[],
-  myId: string,
-): React.ReactNode {
-  if (!body) return body;
-
-  const sorted = [...members].sort(
-    (a, b) => b.display_name.length - a.display_name.length,
-  );
-  const escaped = sorted.map((m) =>
-    m.display_name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
-  );
-  const regex = new RegExp(`@(${[...escaped, ...MENTION_SPECIALS].join("|")})`, "g");
-
-  const parts: React.ReactNode[] = [];
-  let lastIndex = 0;
-  let match;
-  let key = 0;
-
-  regex.lastIndex = 0;
-  while ((match = regex.exec(body)) !== null) {
-    if (match.index > lastIndex) {
-      parts.push(...linkify(body.slice(lastIndex, match.index), key++));
-    }
-    const member = members.find((m) => m.display_name === match![1]);
-    const isMe = member?.id === myId;
-    parts.push(
-      <span
-        key={key++}
-        className={`font-semibold px-0.5 rounded-sm ${
-          isMe ? "bg-pastel-tint text-pastel-ink" : "bg-surface-2 text-ink"
-        }`}
-      >
-        @{match[1]}
-      </span>,
-    );
-    lastIndex = match.index + match[0].length;
-  }
-
-  if (lastIndex < body.length) {
-    parts.push(...linkify(body.slice(lastIndex), key++));
-  }
-
-  return parts.length ? <>{parts}</> : body;
-}
 
 // Download an attachment (or share it via the Web Share API on mobile when
 // available). Falls back to opening the URL in a new tab on failure.
@@ -1035,37 +719,6 @@ function ImageLightbox({
   );
 }
 
-// A single sent image, rendered clean (no frame/caption). Tap → open the
-// zoomable lightbox; hold / right-click → open the actions menu.
-function ThreadImage({
-  att,
-  onOpen,
-  onHold,
-}: {
-  att: Attachment;
-  onOpen: () => void;
-  onHold: () => void;
-}) {
-  const press = useImagePress(onOpen, onHold);
-  return (
-    <button
-      {...press}
-      className="block overflow-hidden border border-border bg-surface-2 transition-opacity duration-150 hover:opacity-90"
-      style={{ maxWidth: 272, lineHeight: 0 }}
-    >
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src={localPreview(att.url) ?? att.url}
-        alt={att.name}
-        draggable={false}
-        className="block h-auto w-full"
-        style={{ maxHeight: 360, objectFit: "cover" }}
-        loading="lazy"
-      />
-    </button>
-  );
-}
-
 // A single staged (not-yet-sent) file in the composer. Images render as a
 // thumbnail tile with a remove button; other files fall back to a name chip.
 function PendingPreview({
@@ -1117,60 +770,6 @@ function PendingPreview({
       </button>
     </div>
   );
-}
-
-// Tap vs. hold discrimination for images. A plain tap/click fires onTap; a
-// 500ms hold or a right-click fires onHold (and suppresses the following tap).
-// stopPropagation keeps the press off the message row's own long-press/menu.
-function useImagePress(onTap: () => void, onHold: () => void) {
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const start = useRef<{ x: number; y: number } | null>(null);
-  const held = useRef(false);
-
-  const clear = () => {
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = null;
-    start.current = null;
-  };
-
-  return {
-    onPointerDown: (e: React.PointerEvent) => {
-      e.stopPropagation();
-      held.current = false;
-      start.current = { x: e.clientX, y: e.clientY };
-      if (timer.current) clearTimeout(timer.current);
-      timer.current = setTimeout(() => {
-        held.current = true;
-        timer.current = null;
-        onHold();
-      }, 500);
-    },
-    onPointerMove: (e: React.PointerEvent) => {
-      const s = start.current;
-      if (!s) return;
-      if (Math.abs(e.clientX - s.x) > 10 || Math.abs(e.clientY - s.y) > 10) {
-        clear();
-      }
-    },
-    onPointerUp: () => clear(),
-    onPointerLeave: () => clear(),
-    onClick: (e: React.MouseEvent) => {
-      if (held.current) {
-        e.preventDefault();
-        e.stopPropagation();
-        held.current = false;
-        return;
-      }
-      onTap();
-    },
-    onContextMenu: (e: React.MouseEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-      clear();
-      held.current = true;
-      onHold();
-    },
-  };
 }
 
 function formatLastSeen(iso: string): string {
@@ -1240,153 +839,6 @@ function ProfileCard({
           </p>
         ) : null}
       </div>
-    </div>
-  );
-}
-
-function LinkPreview({ url }: { url: string }) {
-  const { data } = trpc.links.unfurl.useQuery(
-    { url },
-    { staleTime: 60 * 60 * 1000, retry: false },
-  );
-  if (!data || !data.title) return null;
-  let domain = "";
-  try { domain = new URL(url).hostname.replace(/^www\./, ""); } catch { /* ignore */ }
-  return (
-    <a
-      href={url}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="block mt-2 max-w-sm border border-border bg-surface-2 hover:border-pastel-deep transition-colors overflow-hidden"
-    >
-      {data.image_url && (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img src={data.image_url} alt="" className="w-full h-36 object-cover" />
-      )}
-      <div className="p-2">
-        <p className="text-[13px] font-semibold text-ink line-clamp-2">{data.title}</p>
-        {data.description && (
-          <p className="text-[11px] text-muted line-clamp-2 mt-0.5">{data.description}</p>
-        )}
-        <p className="font-mono text-[10px] text-muted-2 mt-1 truncate">{domain}</p>
-      </div>
-    </a>
-  );
-}
-
-// One cell in the multi-image mosaic. Tap → lightbox; hold/right-click → actions.
-function GridTile({
-  att,
-  onOpen,
-  onHold,
-  overlay,
-  style,
-}: {
-  att: Attachment;
-  onOpen: (att: Attachment) => void;
-  onHold: (att: Attachment) => void;
-  overlay?: number;
-  style?: React.CSSProperties;
-}) {
-  const press = useImagePress(() => onOpen(att), () => onHold(att));
-  return (
-    <button
-      {...press}
-      title={att.name}
-      className="relative block w-full h-full overflow-hidden bg-surface-2 focus:outline-none"
-      style={style}
-    >
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src={att.url}
-        alt={att.name}
-        draggable={false}
-        loading="lazy"
-        className="w-full h-full object-cover block"
-      />
-      {overlay != null && overlay > 0 && (
-        <span className="absolute inset-0 flex items-center justify-center bg-ink/55 text-surface font-mono text-lg font-semibold pointer-events-none select-none">
-          +{overlay}
-        </span>
-      )}
-    </button>
-  );
-}
-
-// Messenger-style image mosaic for messages with 2+ images. Tidy grid, no
-// hover-fan / drag — tap any tile to open the lightbox.
-function ImageGallery({
-  attachments,
-  onOpen,
-  onHold,
-}: {
-  attachments: Attachment[];
-  onOpen: (att: Attachment) => void;
-  onHold: (att: Attachment) => void;
-}) {
-  const n = attachments.length;
-  const shown = attachments.slice(0, 4);
-  const extra = n - shown.length;
-  const MAX_W = 272;
-
-  if (n === 2) {
-    return (
-      <div
-        className="grid gap-[2px] overflow-hidden"
-        style={{ width: MAX_W, gridTemplateColumns: "1fr 1fr" }}
-      >
-        {shown.map((att, i) => (
-          <GridTile
-            key={i}
-            att={att}
-            onOpen={onOpen}
-            onHold={onHold}
-            style={{ aspectRatio: "1 / 1" }}
-          />
-        ))}
-      </div>
-    );
-  }
-
-  if (n === 3) {
-    return (
-      <div
-        className="grid gap-[2px] overflow-hidden"
-        style={{
-          width: MAX_W,
-          height: 180,
-          gridTemplateColumns: "1fr 1fr",
-          gridTemplateRows: "1fr 1fr",
-        }}
-      >
-        <GridTile
-          att={shown[0]}
-          onOpen={onOpen}
-          onHold={onHold}
-          style={{ gridRow: "1 / span 2" }}
-        />
-        <GridTile att={shown[1]} onOpen={onOpen} onHold={onHold} />
-        <GridTile att={shown[2]} onOpen={onOpen} onHold={onHold} />
-      </div>
-    );
-  }
-
-  // n >= 4: 2×2 grid, last tile shows "+N" overlay when more images exist.
-  return (
-    <div
-      className="grid gap-[2px] overflow-hidden"
-      style={{ width: MAX_W, gridTemplateColumns: "1fr 1fr" }}
-    >
-      {shown.map((att, i) => (
-        <GridTile
-          key={i}
-          att={att}
-          onOpen={onOpen}
-          onHold={onHold}
-          overlay={i === 3 ? extra : undefined}
-          style={{ aspectRatio: "1 / 1" }}
-        />
-      ))}
     </div>
   );
 }
@@ -2968,6 +2420,7 @@ export function ThreadDetail({
   const canSend = !isDone && (body.trim().length > 0 || pendingFiles.length > 0);
 
   const members = workspaceMembers ?? [];
+  const mentions = useMemo(() => buildMentionMatcher(members, MENTION_SPECIALS), [members]);
   // Past this size, enable content-visibility windowing on message rows.
   const bigThread = displayMessages.length > 60;
 
@@ -3340,11 +2793,7 @@ export function ThreadDetail({
                                 )}
                                 {msg.body && (
                                   <p className="text-[16px] leading-[1.5] text-ink whitespace-pre-wrap break-words">
-                                    {renderBody(
-                                      msg.body,
-                                      members,
-                                      myInfo?.id ?? "",
-                                    )}
+                                    {renderBody(msg.body, mentions, me.id)}
                                   </p>
                                 )}
                                 {!msg.is_deleted && (() => {
