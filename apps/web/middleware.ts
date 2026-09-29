@@ -1,6 +1,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { PW_OK_COOKIE, needsPasswordCheck } from "@/lib/password-gate";
 
 export async function middleware(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request });
@@ -26,13 +27,22 @@ export async function middleware(request: NextRequest) {
     }
   );
 
-  // Refresh session — do not remove
-  // Wrap in try/catch so a paused/unreachable Supabase project doesn't
-  // log everyone out (getUser() throws on network failure).
-  let user = null;
+  const isDocumentNav = request.headers.get("accept")?.includes("text/html") ?? false;
+
+  // Refresh session — do not remove. Document navigations (app open, reload)
+  // do a real Auth round trip so revoked sessions are caught; everything else
+  // verifies the JWT locally (getClaims still refreshes an expired session).
+  // Wrapped in try/catch so a paused/unreachable Supabase project doesn't log
+  // everyone out.
+  let userId: string | null = null;
   try {
-    const { data } = await supabase.auth.getUser();
-    user = data.user;
+    if (isDocumentNav) {
+      const { data } = await supabase.auth.getUser();
+      userId = data.user?.id ?? null;
+    } else {
+      const { data } = await supabase.auth.getClaims();
+      userId = (data?.claims?.sub as string | undefined) ?? null;
+    }
   } catch {
     // Supabase unreachable — let request through, tRPC will surface the error
     return supabaseResponse;
@@ -45,14 +55,14 @@ export async function middleware(request: NextRequest) {
   const isPublic = publicPaths.some((p) => pathname.startsWith(p));
 
   // Redirect unauthenticated users to login
-  if (!user && !isPublic) {
+  if (!userId && !isPublic) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     return NextResponse.redirect(url);
   }
 
   // Redirect authenticated users away from login
-  if (user && pathname === "/login") {
+  if (userId && pathname === "/login") {
     const url = request.nextUrl.clone();
     url.pathname = "/";
     return NextResponse.redirect(url);
@@ -60,29 +70,46 @@ export async function middleware(request: NextRequest) {
 
   // Force passwordless invited users (magic-link only, no password/OAuth) to set
   // a password before using the app. Only check on top-level document
-  // navigations — not data/asset requests — and skip the pages they need to
-  // reach to finish setup (onboarding + the set-password page itself).
+  // navigations, skip the pages they need to finish setup, and skip entirely
+  // once a passed check is cached in a cookie for this user.
   const passwordExempt =
     isPublic || pathname === "/onboarding" || pathname === "/auth/set-password";
-  const isDocumentNav = request.headers.get("accept")?.includes("text/html");
 
-  if (user && isDocumentNav && !passwordExempt) {
+  if (
+    userId &&
+    isDocumentNav &&
+    !passwordExempt &&
+    needsPasswordCheck(request.cookies.get(PW_OK_COOKIE)?.value, userId)
+  ) {
     const admin = createAdminClient();
-    const { data: needsPassword } = await admin.rpc("needs_password_setup", {
-      uid: user.id,
+    const { data: needsPassword, error } = await admin.rpc("needs_password_setup", {
+      uid: userId,
     });
     if (needsPassword) {
       const url = request.nextUrl.clone();
       url.pathname = "/auth/set-password";
       return NextResponse.redirect(url);
     }
+    if (!error && needsPassword === false) {
+      supabaseResponse.cookies.set(PW_OK_COOKIE, userId, {
+        httpOnly: true,
+        sameSite: "lax",
+        secure: process.env.NODE_ENV === "production",
+        path: "/",
+        maxAge: 60 * 60 * 24 * 365,
+      });
+    }
   }
 
   return supabaseResponse;
 }
 
+// Deliberately still runs on /api/trpc: this is where an expired session is
+// refreshed AND the rotated cookies are written back to the browser. Route
+// handlers can't persist cookies, so refreshing there would burn the refresh
+// token and log the user out.
 export const config = {
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+    "/((?!_next/static|_next/image|favicon.ico|.*\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
   ],
 };
