@@ -637,7 +637,6 @@ function Row({
               {seenReaders.slice(0, 5).map((reader, readerIndex) => (
                 <div
                   key={reader.id}
-                  className="border border-surface rounded-sm"
                   style={{ marginLeft: readerIndex === 0 ? 0 : -6 }}
                   title={`Seen by ${reader.name}`}
                 >
