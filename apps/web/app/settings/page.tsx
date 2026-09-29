@@ -6,6 +6,7 @@ import { trpc } from "@/lib/trpc/client";
 import { createClient } from "@/lib/supabase/client";
 import { CreateGroupModal } from "@/components/sidebar";
 import { Avatar } from "@/components/avatar";
+import { BlobSettings } from "@/components/blob-settings";
 import { WebPushToggle } from "@/components/web-push-toggle";
 import { useTheme, type ThemeMode } from "@/lib/theme-context";
 import { isSoundEnabled, setSoundEnabled, playReceive } from "@/lib/sound";
@@ -577,6 +578,7 @@ function DeleteAccountSection() {
 }
 
 export default function SettingsPage() {
+  const { data: profile } = trpc.profile.get.useQuery();
   return (
     <div className="flex h-screen-dynamic bg-surface">
       <div className="flex-1 overflow-y-auto">
@@ -595,6 +597,7 @@ export default function SettingsPage() {
 
           <div className="space-y-10">
             <ProfileSection />
+            {profile?.id && <BlobSettings userId={profile.id} />}
             <ThemeSection />
             <ChangePasswordSection />
             <MyGroupsSection />
