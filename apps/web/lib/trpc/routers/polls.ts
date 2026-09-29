@@ -2,6 +2,8 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, protectedProcedure } from "../trpc";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { assertThreadAccess } from "../thread-access";
+import { accessibleByGroup } from "@/lib/server-shapes";
 
 type VoterInfo = { id: string; display_name: string; avatar_url: string | null };
 type PollData = {
@@ -20,58 +22,44 @@ export const pollsRouter = router({
       const admin = createAdminClient();
       if (input.pollIds.length === 0) return {};
 
-      const { data: pollRows } = await admin
-        .from("polls")
-        .select("id, question, thread_id")
-        .in("id", input.pollIds);
-      if (!pollRows || pollRows.length === 0) return {};
+      // One wave: polls (+ their group), options with embedded votes, and the
+      // caller's groups for the access filter.
+      const [{ data: pollRows }, { data: optionRows }, { data: memberships }] = await Promise.all([
+        admin.from("polls").select("id, question, threads!inner(group_id)").in("id", input.pollIds),
+        admin
+          .from("poll_options")
+          .select("id, poll_id, text, created_at, poll_votes(user_id, profiles(id, display_name, avatar_url))")
+          .in("poll_id", input.pollIds)
+          .order("created_at"),
+        admin.from("group_memberships").select("group_id").eq("user_id", profile.id),
+      ]);
 
-      // Membership check — only return polls in groups the caller belongs to.
-      const threadIds = Array.from(new Set(pollRows.map((p) => p.thread_id as string)));
-      const { data: threads } = await admin.from("threads").select("id, group_id").in("id", threadIds);
-      const threadGroup = new Map((threads ?? []).map((t) => [t.id as string, t.group_id as string]));
-      const groupIds = Array.from(new Set((threads ?? []).map((t) => t.group_id as string)));
-      const { data: memberships } = await admin
-        .from("group_memberships")
-        .select("group_id")
-        .eq("user_id", profile.id)
-        .in("group_id", groupIds);
-      const memberGroupIds = new Set((memberships ?? []).map((m) => m.group_id as string));
-
-      const allowed = pollRows.filter((p) =>
-        memberGroupIds.has(threadGroup.get(p.thread_id as string) ?? "")
+      const myGroups = new Set((memberships ?? []).map((m) => m.group_id as string));
+      const allowed = accessibleByGroup(
+        pollRows ?? [],
+        (p) => (p.threads as unknown as { group_id: string } | null)?.group_id,
+        myGroups,
       );
-      if (allowed.length === 0) return {};
-      const allowedIds = allowed.map((p) => p.id as string);
-
-      const { data: optionRows } = await admin
-        .from("poll_options")
-        .select("id, poll_id, text")
-        .in("poll_id", allowedIds)
-        .order("created_at");
-      const optionIds = (optionRows ?? []).map((o) => o.id as string);
-      const { data: voteRows } = optionIds.length > 0
-        ? await admin
-            .from("poll_votes")
-            .select("poll_option_id, user_id, profiles(id, display_name, avatar_url)")
-            .in("poll_option_id", optionIds)
-        : { data: [] as { poll_option_id: string; user_id: string; profiles: unknown }[] };
 
       const result: Record<string, PollData> = {};
       for (const poll of allowed) {
         const options = (optionRows ?? [])
           .filter((o) => o.poll_id === poll.id)
           .map((o) => {
-            const votes = (voteRows ?? []).filter((v) => v.poll_option_id === o.id);
+            const votes = (o.poll_votes ?? []) as unknown as {
+              user_id: string;
+              profiles: { id: string; display_name: string; avatar_url: string | null } | null;
+            }[];
             return {
               id: o.id as string,
               text: o.text as string,
               vote_count: votes.length,
               user_voted: votes.some((v) => v.user_id === profile.id),
-              voters: votes.map((v) => {
-                const p = v.profiles as { id: string; display_name: string; avatar_url: string | null } | null;
-                return { id: v.user_id as string, display_name: p?.display_name ?? "Unknown", avatar_url: p?.avatar_url ?? null };
-              }),
+              voters: votes.map((v) => ({
+                id: v.user_id,
+                display_name: v.profiles?.display_name ?? "Unknown",
+                avatar_url: v.profiles?.avatar_url ?? null,
+              })),
             };
           });
         result[poll.id as string] = { id: poll.id as string, question: poll.question as string, options };
@@ -88,23 +76,10 @@ export const pollsRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const { supabase, profile } = ctx;
+      const { profile } = ctx;
       const admin = createAdminClient();
 
-      const { data: thread } = await supabase
-        .from("threads")
-        .select("group_id")
-        .eq("id", input.threadId)
-        .single();
-      if (!thread) throw new TRPCError({ code: "NOT_FOUND" });
-
-      const { data: membership } = await supabase
-        .from("group_memberships")
-        .select("id")
-        .eq("group_id", thread.group_id)
-        .eq("user_id", profile.id)
-        .single();
-      if (!membership) throw new TRPCError({ code: "FORBIDDEN" });
+      await assertThreadAccess(admin, input.threadId, profile.id);
 
       const { data: poll, error: pollErr } = await admin
         .from("polls")
@@ -135,22 +110,15 @@ export const pollsRouter = router({
   addOption: protectedProcedure
     .input(z.object({ pollId: z.string().uuid(), text: z.string().min(1).max(200) }))
     .mutation(async ({ ctx, input }) => {
-      const { supabase, profile } = ctx;
+      const { profile } = ctx;
       const admin = createAdminClient();
 
-      const { data: poll } = await admin.from("polls").select("thread_id").eq("id", input.pollId).single();
-      if (!poll) throw new TRPCError({ code: "NOT_FOUND" });
-
-      const { data: thread } = await admin.from("threads").select("group_id").eq("id", poll.thread_id).single();
-      if (!thread) throw new TRPCError({ code: "NOT_FOUND" });
-
-      const { data: membership } = await supabase
-        .from("group_memberships")
-        .select("id")
-        .eq("group_id", thread.group_id)
-        .eq("user_id", profile.id)
-        .single();
-      if (!membership) throw new TRPCError({ code: "FORBIDDEN" });
+      const { data: access, error: accessErr } = await admin.rpc("poll_access", {
+        p_poll: input.pollId,
+        p_user: profile.id,
+      });
+      if (accessErr) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: accessErr.message });
+      if (!(access as unknown[] | null)?.length) throw new TRPCError({ code: "NOT_FOUND" });
 
       const { data, error } = await admin
         .from("poll_options")
@@ -164,43 +132,14 @@ export const pollsRouter = router({
   vote: protectedProcedure
     .input(z.object({ pollOptionId: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
-      const { supabase, profile } = ctx;
       const admin = createAdminClient();
-
-      const { data: option } = await admin
-        .from("poll_options")
-        .select("poll_id")
-        .eq("id", input.pollOptionId)
-        .single();
-      if (!option) throw new TRPCError({ code: "NOT_FOUND" });
-
-      const { data: poll } = await admin.from("polls").select("thread_id").eq("id", option.poll_id).single();
-      if (!poll) throw new TRPCError({ code: "NOT_FOUND" });
-
-      const { data: thread } = await admin.from("threads").select("group_id").eq("id", poll.thread_id).single();
-      if (!thread) throw new TRPCError({ code: "NOT_FOUND" });
-
-      const { data: membership } = await supabase
-        .from("group_memberships")
-        .select("id")
-        .eq("group_id", thread.group_id)
-        .eq("user_id", profile.id)
-        .single();
-      if (!membership) throw new TRPCError({ code: "FORBIDDEN" });
-
-      const { data: existing } = await admin
-        .from("poll_votes")
-        .select("id")
-        .eq("poll_option_id", input.pollOptionId)
-        .eq("user_id", profile.id)
-        .maybeSingle();
-
-      if (existing) {
-        await admin.from("poll_votes").delete().eq("id", existing.id);
-      } else {
-        await admin.from("poll_votes").insert({ poll_option_id: input.pollOptionId, user_id: profile.id });
-      }
-
-      return { success: true };
+      const { data, error } = await admin.rpc("vote_toggle", {
+        p_option: input.pollOptionId,
+        p_user: ctx.profile.id,
+      });
+      if (error) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: error.message });
+      const row = (data as { poll_id: string; voted: boolean }[] | null)?.[0];
+      if (!row) throw new TRPCError({ code: "NOT_FOUND" });
+      return { success: true, voted: row.voted };
     }),
 });
