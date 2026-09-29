@@ -55,7 +55,7 @@ export function evolveSpec(
     toPlainFinish: plain,
     title: level === 3 ? "Final form unlocked!" : "Your blob evolved!",
     fromTo: `${from.shape ?? base} → ${shape} · Lv${level}`,
-    sub: `${level === 3 ? 500 : 50} messages sent. Equip it now or switch any time in Settings.`,
+    sub: "Equip it now or switch any time in Settings.",
     finalFromTo: `${shape} · Lv${level} · shiny`,
     finalSub:
       level === 2

@@ -285,6 +285,8 @@ export const messagesRouter = router({
                 url: z.string().url(),
                 type: z.enum(["image", "audio", "video", "file"]),
                 name: z.string(),
+                width: z.number().int().positive().max(20000).optional(),
+                height: z.number().int().positive().max(20000).optional(),
               })
             )
             .default([]),

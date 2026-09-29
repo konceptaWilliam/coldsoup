@@ -9,6 +9,13 @@ import type { BlobatarAnimate } from "@/lib/avatar";
 
 /** Locked forms in Settings / the profile card: body and eyes one grey. */
 export const SILHOUETTE = { head: "#9A988F", eye: "#9A988F" };
+/**
+ * Locked forms draw this fixed seed + shape instead of the user's own, so the
+ * silhouette is identical for everyone and never hints at the real evolution.
+ * "round" is never an evolution target, so it can't match a real form either.
+ */
+const SILHOUETTE_SEED = "coldsoup:locked";
+const SILHOUETTE_TRAITS = blobTraits("round");
 /** Below this a finish is sub-pixel noise; draw the shape only. */
 export const MIN_FINISH_SIZE = 20;
 /** Shiny sparkles only where there is room for them. */
@@ -33,9 +40,9 @@ export const BlobForm = forwardRef<HTMLSpanElement, Props>(function BlobForm(
   { name, look, size, animate, expression, palette, silhouette, title },
   ref,
 ) {
-  const traits = blobTraits(look.shape);
+  const traits = silhouette ? SILHOUETTE_TRAITS : blobTraits(look.shape);
   const common = {
-    name,
+    name: silhouette ? SILHOUETTE_SEED : name,
     traits,
     palette: silhouette ? SILHOUETTE : palette,
     expression,

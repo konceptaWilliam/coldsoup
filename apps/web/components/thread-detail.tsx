@@ -1249,6 +1249,7 @@ export function ThreadDetail({
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const composerApi = useRef<ComposerHandle>(null);
+  const listContentRef = useRef<HTMLDivElement>(null);
   const prevMsgCountRef = useRef(0);
   const prevLatestMessageIdRef = useRef<string | null>(null);
   const handledHighlightRef = useRef<string | null>(null);
@@ -1367,6 +1368,21 @@ export function ThreadDetail({
     root.scrollTop += root.scrollHeight - preLoadScrollHeight.current;
     preLoadScrollHeight.current = null;
   }, [thread.pageCount]);
+
+  // Keep the newest message in view while content above it grows (images,
+  // link previews, polls loading) — only when the user is at the bottom.
+  const listVisible = !(thread.isLoading && messages.length === 0);
+  useEffect(() => {
+    const root = scrollContainerRef.current;
+    const content = listContentRef.current;
+    if (!root || !content || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => {
+      if (!isNearBottomRef.current || userScrollingRef.current) return;
+      root.scrollTop = root.scrollHeight;
+    });
+    ro.observe(content);
+    return () => ro.disconnect();
+  }, [listVisible]);
 
   const updateScrollState = useCallback(() => {
     const container = scrollContainerRef.current;
@@ -2203,7 +2219,7 @@ export function ThreadDetail({
             ))}
           </div>
         ) : (
-          <div className="mt-auto">
+          <div className="mt-auto" ref={listContentRef}>
           {displayMessages.length === 0 ? (
             <div className="flex items-center justify-center h-32">
               <p className="font-mono text-sm text-muted">

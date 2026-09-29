@@ -8,6 +8,7 @@ import { SMeterResultsLink } from "@/components/smeter";
 import { systemEventText, type SystemEvent } from "@/lib/system-event";
 import { isShape } from "@/lib/blob-evolution";
 import { localPreview } from "@/lib/local-previews";
+import { aspectStyle } from "@/lib/media";
 import type { MentionMatcher } from "@/lib/mentions";
 import type { Attachment, PollData } from "@/lib/thread-types";
 
@@ -336,7 +337,7 @@ export function ThreadImage({
         alt={att.name}
         draggable={false}
         className="block h-auto w-full"
-        style={{ maxHeight: 360, objectFit: "cover" }}
+        style={{ width: "100%", maxHeight: 360, objectFit: "cover", ...aspectStyle(att) }}
         loading="lazy"
       />
     </button>
