@@ -72,7 +72,10 @@ export type SystemEvent =
   | { kind: "smeter_done"; smeterId: string; smeterTitle: string | null }
   | { kind: "due_date"; actorName: string; dueDate: string | null }
   | { kind: "thread_created"; actorName: string }
-  | { kind: "thread_renamed"; actorName: string; from: string; to: string };
+  | { kind: "thread_renamed"; actorName: string; from: string; to: string }
+  // A user's blobatar evolved; posted in the thread of the message that did it.
+  // `shape` is the blobatar silhouette name of the new form.
+  | { kind: "blob_evolved"; userId: string; userName: string; level: 2 | 3; shape: string; shiny: boolean };
 
 export type SMeterMode = "weekly" | "dates";
 

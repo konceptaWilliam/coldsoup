@@ -3,6 +3,10 @@ import { TRPCError } from "@trpc/server";
 import { router, protectedProcedure } from "../trpc";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isValidAttachmentUrl, isMentioned, shouldNotify, type NotifLevel } from "@/lib/message-policy";
+import { postSystemMessage } from "@/lib/system-messages";
+import { chance, formShape, SHINY2_ODDS, SHINY3_ODDS } from "@/lib/blob-evolution";
+import { baseShapeOf } from "@/lib/blob-base";
+import { cryptoRand } from "@/lib/blob-server";
 
 // Run background work after the response flushes without Vercel freezing the
 // function mid-flight. Mirrors @vercel/functions' waitUntil by reading Vercel's
@@ -334,6 +338,7 @@ export const messagesRouter = router({
             poll: null,
             smeter: null,
             system_event: null,
+            blobLevelUp: null,
             reactions: REACTION_TYPES.map((type) => ({ type, count: 0, userReacted: false, users: [] })),
           };
         }
@@ -377,6 +382,35 @@ export const messagesRouter = router({
       ]);
 
       if (error) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: error.message });
+
+      // Blob evolution: +1 XP per sent message. bump_blob_xp is one atomic
+      // UPDATE, so exactly one send observes each threshold. A failure here
+      // costs one XP at most and must never fail the send.
+      let blobLevelUp: { level: 2 | 3; shiny: boolean } | null = null;
+      try {
+        const { data: bump, error: bumpError } = await admin.rpc("bump_blob_xp", {
+          p_user: profile.id,
+          p_shiny2: chance(SHINY2_ODDS, cryptoRand),
+          p_shiny3: chance(SHINY3_ODDS, cryptoRand),
+        });
+        if (bumpError) throw bumpError;
+        const row = (bump as { level: number; leveled_up: boolean; shiny2: boolean; shiny3: boolean }[] | null)?.[0];
+        if (row?.leveled_up && (row.level === 2 || row.level === 3)) {
+          const level = row.level;
+          const shiny = level === 2 ? row.shiny2 : row.shiny3;
+          blobLevelUp = { level, shiny };
+          await postSystemMessage(admin, input.threadId, {
+            kind: "blob_evolved",
+            userId: profile.id,
+            userName: (profile.display_name as string | null) ?? "Someone",
+            level,
+            shape: formShape(baseShapeOf(profile.id), level, null),
+            shiny,
+          });
+        }
+      } catch (e) {
+        console.error("bump_blob_xp failed", e);
+      }
 
       let reply_to = null;
       if (input.replyToId) {
@@ -558,6 +592,7 @@ export const messagesRouter = router({
         poll: null,
         smeter: null,
         system_event: null,
+        blobLevelUp,
         reactions: REACTION_TYPES.map((type) => ({ type, count: 0, userReacted: false, users: [] })),
       };
     }),

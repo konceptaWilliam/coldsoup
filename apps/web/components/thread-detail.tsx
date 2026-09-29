@@ -20,6 +20,11 @@ import { haptic } from "@/lib/haptics";
 import { playSend, playReceive } from "@/lib/sound";
 import { SMeterCard, SMeterCreateModal, SMeterResultsLink, type SMeterSummary } from "@/components/smeter";
 import { systemEventText, type SystemEvent } from "@/lib/system-event";
+import { useBlob } from "@/lib/use-blob";
+import { BlobForm } from "@/components/blob-form";
+import { BlobLevel } from "@/components/blob-level";
+import { EvolveModal, evolveSpec, type RevealSpec } from "@/components/evolve-modal";
+import { isShape } from "@/lib/blob-evolution";
 
 type ThreadStatus = "OPEN" | "URGENT" | "DONE";
 
@@ -187,6 +192,28 @@ function writeOutbox(threadId: string, entries: FailedEntry[]) {
 
 // Centered grey thread-event notice (no author bubble).
 function SystemMessage({ event, threadId }: { event: SystemEvent; threadId: string }) {
+  if (event.kind === "blob_evolved") {
+    const shiny = event.shiny;
+    return (
+      <div className="flex justify-center my-3 px-4">
+        <span
+          className={`inline-flex items-center gap-2 border px-2 py-1 font-mono text-[11px] leading-relaxed max-w-[85%] ${
+            shiny ? "border-accent text-ink bg-accent-light" : "border-dashed border-border-strong text-muted"
+          }`}
+        >
+          <BlobForm
+            name={event.userId}
+            look={{
+              shape: isShape(event.shape) ? event.shape : null,
+              finish: shiny ? "shiny" : event.level === 3 ? "holo" : "plain",
+            }}
+            size={22}
+          />
+          {systemEventText(event)}
+        </span>
+      </div>
+    );
+  }
   return (
     <div className="flex justify-center my-3 px-4">
       <span className="font-mono text-[11px] text-muted text-center leading-relaxed max-w-[85%]">
@@ -1308,6 +1335,7 @@ function ProfileCard({
         <p className="mt-4 text-base font-semibold text-ink break-words">
           {target.name}
         </p>
+        {target.id && <BlobLevel userId={target.id} />}
         {online ? (
           <p className="mt-2 inline-flex items-center gap-1.5 font-mono text-[11px] text-online uppercase tracking-[0.08em]">
             <span className="w-2 h-2 rounded-full bg-online" />
@@ -2008,6 +2036,11 @@ export function ThreadDetail({
   const utils = trpc.useUtils();
   const router = useRouter();
   const { markRead } = useUnread();
+  const [reveal, setReveal] = useState<RevealSpec | null>(null);
+  const myBlob = useBlob(myInfo?.id);
+  const setBlobForm = trpc.profile.setBlobForm.useMutation({
+    onSuccess: () => utils.profile.blobs.invalidate(),
+  });
 
   // Reply state
   const [replyingTo, setReplyingTo] = useState<{
@@ -2676,6 +2709,11 @@ export function ThreadDetail({
             system_event: SystemEvent | null;
           };
 
+          // Someone evolved: refresh everyone's blob forms.
+          if (newMsg.system_event?.kind === "blob_evolved") {
+            void utils.profile.blobs.invalidate();
+          }
+
           // Defense-in-depth: the server-side filter already scopes to this
           // thread, but keep the guard in case the binding falls back to
           // table-wide delivery.
@@ -2987,6 +3025,12 @@ export function ThreadDetail({
         if (prev.some((x) => x.id === m.id)) return prev;
         return [...prev, m];
       });
+      const up = (msg as unknown as { blobLevelUp?: { level: 2 | 3; shiny: boolean } | null })
+        .blobLevelUp;
+      if (up && myInfo) {
+        void utils.profile.blobs.invalidate();
+        setReveal(evolveSpec(myInfo.id, myBlob, up.level, up.shiny));
+      }
     },
     onError: (_err, _vars, ctx) => {
       if (ctx?.tempId) {
@@ -4555,6 +4599,17 @@ export function ThreadDetail({
         target={profileTarget}
         onClose={() => setProfileTarget(null)}
       />
+
+      {reveal && (
+        <EvolveModal
+          spec={reveal}
+          onPrimary={() => {
+            setBlobForm.mutate({ form: reveal.level });
+            setReveal(null);
+          }}
+          onSecondary={() => setReveal(null)}
+        />
+      )}
 
       {/* Poll create modal */}
       {showPollCreate && (

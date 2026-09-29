@@ -22,6 +22,10 @@ export function systemEventText(e: SystemEvent): string {
       return `${e.actorName} created this thread`;
     case "thread_renamed":
       return `${e.actorName} renamed the thread to ${e.to}`;
+    case "blob_evolved":
+      return e.shiny
+        ? `✨ ${e.userName} reached Lv${e.level} and it's SHINY`
+        : `${e.userName} reached Lv${e.level} and unlocked ${e.shape}`;
     default:
       return "";
   }
