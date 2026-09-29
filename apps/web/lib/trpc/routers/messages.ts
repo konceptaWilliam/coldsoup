@@ -7,6 +7,7 @@ import { postSystemMessage } from "@/lib/system-messages";
 import { chance, formShape, SHINY2_ODDS, SHINY3_ODDS } from "@/lib/blob-evolution";
 import { baseShapeOf } from "@/lib/blob-base";
 import { cryptoRand } from "@/lib/blob-server";
+import { assertThreadAccess } from "../thread-access";
 
 // Run background work after the response flushes without Vercel freezing the
 // function mid-flight. Mirrors @vercel/functions' waitUntil by reading Vercel's
@@ -88,26 +89,9 @@ export const messagesRouter = router({
       })
     )
     .query(async ({ ctx, input }) => {
-      const { supabase, profile } = ctx;
-
-      const { data: thread } = await supabase
-        .from("threads")
-        .select("group_id")
-        .eq("id", input.threadId)
-        .single();
-
-      if (!thread) throw new TRPCError({ code: "NOT_FOUND" });
-
-      const { data: membership } = await supabase
-        .from("group_memberships")
-        .select("id")
-        .eq("group_id", thread.group_id)
-        .eq("user_id", profile.id)
-        .single();
-
-      if (!membership) throw new TRPCError({ code: "FORBIDDEN" });
-
+      const { profile } = ctx;
       const admin = createAdminClient();
+
       let query = admin
         .from("messages")
         .select("id, body, created_at, edited_at, is_deleted, thread_id, user_id, client_id, attachments, reply_to_id, reply_to_attachment_url, poll_id, smeter_id, system_event, profiles(id, display_name, avatar_url)")
@@ -119,13 +103,35 @@ export const messagesRouter = router({
         query = query.lt("created_at", input.cursor);
       }
 
-      const { data, error } = await query;
+      // Access check runs alongside the page fetch; nothing is returned
+      // unless it passes.
+      const [thread, { data, error }] = await Promise.all([
+        assertThreadAccess(admin, input.threadId, profile.id),
+        query,
+      ]);
       if (error) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: error.message });
 
       const rows = data ?? [];
       const messageIds = rows.map((m) => m.id);
+      const replyToIds = Array.from(new Set(rows.filter((m) => m.reply_to_id).map((m) => m.reply_to_id!)));
+      const pollIds = Array.from(new Set(rows.filter((m) => m.poll_id).map((m) => m.poll_id!)));
+      const smeterIds = Array.from(new Set(rows.filter((m) => m.smeter_id).map((m) => m.smeter_id!)));
 
-      const reactionRows =
+      type VoterInfo = { id: string; display_name: string; avatar_url: string | null };
+      type PollData = { id: string; question: string; options: { id: string; text: string; vote_count: number; user_voted: boolean; voters: VoterInfo[] }[] };
+      type SMeterSummary = {
+        id: string;
+        mode: "weekly" | "dates" | "statements";
+        title: string | null;
+        customDates: string[] | null;
+        customLabels: string[] | null;
+        votedCount: number;
+        memberCount: number;
+        allVoted: boolean;
+        isParticipant: boolean;
+      };
+
+      const loadReactions = async () =>
         messageIds.length > 0
           ? ((await admin
               .from("message_reactions")
@@ -133,10 +139,7 @@ export const messagesRouter = router({
               .in("message_id", messageIds)).data ?? [])
           : [];
 
-      // Fetch reply_to info for messages that are replies
-      const replyToIdSet = new Set(rows.filter((m) => m.reply_to_id).map((m) => m.reply_to_id!));
-      const replyToIds = Array.from(replyToIdSet);
-      const replyToData =
+      const loadReplyTargets = async () =>
         replyToIds.length > 0
           ? ((await admin
               .from("messages")
@@ -144,26 +147,9 @@ export const messagesRouter = router({
               .in("id", replyToIds)).data ?? [])
           : [];
 
-      const replyToMap = new Map(
-        replyToData.map((m) => [
-          m.id,
-          {
-            id: m.id,
-            // Never surface a deleted message's body, even in a reply quote.
-            body: m.is_deleted ? "" : (m.body as string).slice(0, 120),
-            author_name:
-              (m.profiles as unknown as { display_name: string } | null)?.display_name ?? "Unknown",
-            target_deleted: m.is_deleted,
-          },
-        ])
-      );
-
-      // Fetch poll data for any poll messages
-      const pollIds = Array.from(new Set(rows.filter((m) => m.poll_id).map((m) => m.poll_id!)));
-      type VoterInfo = { id: string; display_name: string; avatar_url: string | null };
-      const pollDataMap = new Map<string, { id: string; question: string; options: { id: string; text: string; vote_count: number; user_voted: boolean; voters: VoterInfo[] }[] }>();
-
-      if (pollIds.length > 0) {
+      const loadPolls = async () => {
+        const map = new Map<string, PollData>();
+        if (pollIds.length === 0) return map;
         const [{ data: pollRows }, { data: optionRows }] = await Promise.all([
           admin.from("polls").select("id, question").in("id", pollIds),
           admin.from("poll_options").select("id, poll_id, text").in("poll_id", pollIds).order("created_at"),
@@ -189,28 +175,16 @@ export const messagesRouter = router({
                 }),
               };
             });
-          pollDataMap.set(poll.id, { id: poll.id, question: poll.question, options });
+          map.set(poll.id, { id: poll.id, question: poll.question, options });
         }
-      }
-
-      // Fetch a lightweight summary for any S-meter messages. Aggregate scores
-      // stay out of the list — they unlock only via smeters.get once everyone
-      // has voted. Every message here is in the same thread, hence same group.
-      const smeterIds = Array.from(new Set(rows.filter((m) => m.smeter_id).map((m) => m.smeter_id!)));
-      type SMeterSummary = {
-        id: string;
-        mode: "weekly" | "dates" | "statements";
-        title: string | null;
-        customDates: string[] | null;
-        customLabels: string[] | null;
-        votedCount: number;
-        memberCount: number;
-        allVoted: boolean;
-        isParticipant: boolean;
+        return map;
       };
-      const smeterDataMap = new Map<string, SMeterSummary>();
 
-      if (smeterIds.length > 0) {
+      // Lightweight S-meter summaries. Aggregate scores stay out of the list —
+      // they unlock only via smeters.get once everyone has voted.
+      const loadSmeters = async () => {
+        const map = new Map<string, SMeterSummary>();
+        if (smeterIds.length === 0) return map;
         const [{ data: groupMemberRows }, { data: smeterRows }, { data: smeterResponseRows }] = await Promise.all([
           admin.from("group_memberships").select("user_id").eq("group_id", thread.group_id),
           admin.from("smeters").select("id, mode, custom_dates, custom_labels, title, participant_ids").in("id", smeterIds),
@@ -227,7 +201,7 @@ export const messagesRouter = router({
               .map((r) => r.user_id as string)
           );
           const members = participants.length;
-          smeterDataMap.set(s.id as string, {
+          map.set(s.id as string, {
             id: s.id as string,
             mode: (s.mode as "weekly" | "dates" | "statements") ?? "weekly",
             title: (s.title as string | null) ?? null,
@@ -239,7 +213,29 @@ export const messagesRouter = router({
             isParticipant: participantSet.has(profile.id),
           });
         }
-      }
+        return map;
+      };
+
+      const [reactionRows, replyToData, pollDataMap, smeterDataMap] = await Promise.all([
+        loadReactions(),
+        loadReplyTargets(),
+        loadPolls(),
+        loadSmeters(),
+      ]);
+
+      const replyToMap = new Map(
+        replyToData.map((m) => [
+          m.id,
+          {
+            id: m.id,
+            // Never surface a deleted message's body, even in a reply quote.
+            body: m.is_deleted ? "" : (m.body as string).slice(0, 120),
+            author_name:
+              (m.profiles as unknown as { display_name: string } | null)?.display_name ?? "Unknown",
+            target_deleted: m.is_deleted,
+          },
+        ])
+      );
 
       const messages = [...rows].reverse().map((m) => ({
         ...m,
@@ -301,48 +297,8 @@ export const messagesRouter = router({
         })
     )
     .mutation(async ({ ctx, input }) => {
-      const { supabase, profile } = ctx;
+      const { profile } = ctx;
       const admin = createAdminClient();
-
-      const { data: thread } = await supabase
-        .from("threads")
-        .select("group_id")
-        .eq("id", input.threadId)
-        .single();
-
-      if (!thread) throw new TRPCError({ code: "NOT_FOUND" });
-
-      const { data: membership } = await supabase
-        .from("group_memberships")
-        .select("id")
-        .eq("group_id", thread.group_id)
-        .eq("user_id", profile.id)
-        .single();
-
-      if (!membership) throw new TRPCError({ code: "FORBIDDEN" });
-
-      // Idempotent retry: if this client_id already landed (response lost,
-      // client resent), return the existing row instead of inserting a dupe.
-      if (input.clientId) {
-        const { data: existing } = await admin
-          .from("messages")
-          .select("id, body, created_at, edited_at, is_deleted, thread_id, user_id, client_id, attachments, reply_to_id, poll_id, smeter_id, system_event, profiles(id, display_name, avatar_url)")
-          .eq("thread_id", input.threadId)
-          .eq("client_id", input.clientId)
-          .eq("user_id", profile.id)
-          .maybeSingle();
-        if (existing) {
-          return {
-            ...existing,
-            reply_to: null,
-            poll: null,
-            smeter: null,
-            system_event: null,
-            blobLevelUp: null,
-            reactions: REACTION_TYPES.map((type) => ({ type, count: 0, userReacted: false, users: [] })),
-          };
-        }
-      }
 
       const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
       for (const att of input.attachments) {
@@ -361,7 +317,45 @@ export const messagesRouter = router({
         ? (input.replyToAttachmentUrl ?? null)
         : null;
 
-      const [{ data, error }] = await Promise.all([
+      const MESSAGE_COLUMNS =
+        "id, body, created_at, edited_at, is_deleted, thread_id, user_id, client_id, attachments, reply_to_id, poll_id, smeter_id, system_event, profiles(id, display_name, avatar_url)";
+
+      // Access check and idempotency lookup in parallel. Idempotent retry: if
+      // this client_id already landed (response lost, client resent), return
+      // the existing row instead of inserting a dupe.
+      const [thread, existing] = await Promise.all([
+        assertThreadAccess(admin, input.threadId, profile.id),
+        input.clientId
+          ? admin
+              .from("messages")
+              .select(MESSAGE_COLUMNS)
+              .eq("thread_id", input.threadId)
+              .eq("client_id", input.clientId)
+              .eq("user_id", profile.id)
+              .maybeSingle()
+              .then((r) => r.data)
+          : Promise.resolve(null),
+      ]);
+      if (existing) {
+        return {
+          ...existing,
+          reply_to: null,
+          poll: null,
+          smeter: null,
+          system_event: null,
+          blobLevelUp: null,
+          reactions: REACTION_TYPES.map((type) => ({ type, count: 0, userReacted: false, users: [] })),
+        };
+      }
+
+      type BumpRow = { level: number; leveled_up: boolean; shiny2: boolean; shiny3: boolean };
+
+      // Insert, thread bump, XP bump and reply-target lookup are independent,
+      // so they share one round trip. Blob evolution: +1 XP per sent message;
+      // bump_blob_xp is one atomic UPDATE, so exactly one send observes each
+      // threshold. A failure there must never fail the send (it costs one XP
+      // at most — including the rare case where the insert itself fails).
+      const [{ data, error }, , bump, replyMsg] = await Promise.all([
         admin
           .from("messages")
           .insert({
@@ -373,61 +367,71 @@ export const messagesRouter = router({
             reply_to_attachment_url: replyToAttachmentUrl,
             client_id: input.clientId ?? null,
           })
-          .select("id, body, created_at, edited_at, is_deleted, thread_id, user_id, client_id, attachments, reply_to_id, poll_id, smeter_id, system_event, profiles(id, display_name, avatar_url)")
+          .select(MESSAGE_COLUMNS)
           .single(),
         admin
           .from("threads")
           .update({ updated_at: new Date().toISOString() })
           .eq("id", input.threadId),
+        admin
+          .rpc("bump_blob_xp", {
+            p_user: profile.id,
+            p_shiny2: chance(SHINY2_ODDS, cryptoRand),
+            p_shiny3: chance(SHINY3_ODDS, cryptoRand),
+          })
+          .then(({ data: rows, error: bumpError }) => {
+            if (bumpError) throw bumpError;
+            return (rows as BumpRow[] | null)?.[0] ?? null;
+          })
+          .then(
+            (row) => row,
+            (e) => {
+              console.error("bump_blob_xp failed", e);
+              return null;
+            }
+          ),
+        input.replyToId
+          ? admin
+              .from("messages")
+              .select("id, body, profiles(display_name)")
+              .eq("id", input.replyToId)
+              .maybeSingle()
+              .then((r) => r.data)
+          : Promise.resolve(null),
       ]);
 
       if (error) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: error.message });
 
-      // Blob evolution: +1 XP per sent message. bump_blob_xp is one atomic
-      // UPDATE, so exactly one send observes each threshold. A failure here
-      // costs one XP at most and must never fail the send.
       let blobLevelUp: { level: 2 | 3; shiny: boolean } | null = null;
-      try {
-        const { data: bump, error: bumpError } = await admin.rpc("bump_blob_xp", {
-          p_user: profile.id,
-          p_shiny2: chance(SHINY2_ODDS, cryptoRand),
-          p_shiny3: chance(SHINY3_ODDS, cryptoRand),
-        });
-        if (bumpError) throw bumpError;
-        const row = (bump as { level: number; leveled_up: boolean; shiny2: boolean; shiny3: boolean }[] | null)?.[0];
-        if (row?.leveled_up && (row.level === 2 || row.level === 3)) {
-          const level = row.level;
-          const shiny = level === 2 ? row.shiny2 : row.shiny3;
-          blobLevelUp = { level, shiny };
-          await postSystemMessage(admin, input.threadId, {
+      if (bump?.leveled_up && (bump.level === 2 || bump.level === 3)) {
+        const level = bump.level;
+        const shiny = level === 2 ? bump.shiny2 : bump.shiny3;
+        blobLevelUp = { level, shiny };
+        const userName =
+          (data?.profiles as unknown as { display_name: string } | null)?.display_name ?? "Someone";
+        // Posted after the response; the modal on the sender's device comes
+        // from blobLevelUp in the response itself.
+        waitUntil(
+          postSystemMessage(admin, input.threadId, {
             kind: "blob_evolved",
             userId: profile.id,
-            userName: (await ctx.getProfile()).display_name ?? "Someone",
+            userName,
             level,
             shape: formShape(baseShapeOf(profile.id), level, null),
             shiny,
-          });
-        }
-      } catch (e) {
-        console.error("bump_blob_xp failed", e);
+          }).catch((e) => console.error("postSystemMessage failed", e))
+        );
       }
 
       let reply_to = null;
-      if (input.replyToId) {
-        const { data: replyMsg } = await admin
-          .from("messages")
-          .select("id, body, profiles(display_name)")
-          .eq("id", input.replyToId)
-          .single();
-        if (replyMsg) {
-          reply_to = {
-            id: replyMsg.id,
-            body: (replyMsg.body as string).slice(0, 120),
-            author_name:
-              (replyMsg.profiles as unknown as { display_name: string } | null)?.display_name ?? "Unknown",
-            image_url: replyToAttachmentUrl,
-          };
-        }
+      if (replyMsg) {
+        reply_to = {
+          id: replyMsg.id,
+          body: (replyMsg.body as string).slice(0, 120),
+          author_name:
+            (replyMsg.profiles as unknown as { display_name: string } | null)?.display_name ?? "Unknown",
+          image_url: replyToAttachmentUrl,
+        };
       }
 
       // Send push notifications to other group members. Recipient rules:
