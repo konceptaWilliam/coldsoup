@@ -2,6 +2,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, protectedProcedure } from "../trpc";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { assertThreadAccess } from "../thread-access";
 import { postSystemMessage } from "@/lib/system-messages";
 import { buildCatchUp, type CatchUpThread } from "@/lib/message-policy";
 
@@ -59,32 +60,22 @@ export const threadsRouter = router({
   get: protectedProcedure
     .input(z.object({ threadId: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
-      const { supabase, profile } = ctx;
+      const { profile } = ctx;
       const admin = createAdminClient();
 
-      const { data: thread } = await supabase
-        .from("threads")
-        .select("group_id")
-        .eq("id", input.threadId)
-        .single();
-      if (!thread) throw new TRPCError({ code: "NOT_FOUND" });
-
-      const { data: membership } = await supabase
-        .from("group_memberships")
-        .select("id")
-        .eq("group_id", thread.group_id)
-        .eq("user_id", profile.id)
-        .single();
-      if (!membership) throw new TRPCError({ code: "FORBIDDEN" });
-
-      const { data, error } = await admin
-        .from("threads")
-        .select(
-          `id, title, status, group_id, created_by, due_date,
-           creator:profiles!threads_created_by_fkey(id, display_name, avatar_url)`
-        )
-        .eq("id", input.threadId)
-        .single();
+      // Access check and data fetch run in parallel; the data is only
+      // returned when the access check passes.
+      const [, { data, error }] = await Promise.all([
+        assertThreadAccess(admin, input.threadId, profile.id),
+        admin
+          .from("threads")
+          .select(
+            `id, title, status, group_id, created_by, due_date,
+             creator:profiles!threads_created_by_fkey(id, display_name, avatar_url)`
+          )
+          .eq("id", input.threadId)
+          .single(),
+      ]);
       if (error) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: error.message });
 
       return data;
@@ -273,23 +264,15 @@ export const threadsRouter = router({
   markRead: protectedProcedure
     .input(z.object({ threadId: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
-      const { supabase, profile } = ctx;
+      const { profile } = ctx;
       const admin = createAdminClient();
 
-      const { data: thread } = await supabase
-        .from("threads")
-        .select("group_id")
-        .eq("id", input.threadId)
-        .single();
-      if (!thread) throw new TRPCError({ code: "NOT_FOUND" });
-
-      const { data: membership } = await supabase
-        .from("group_memberships")
-        .select("id")
-        .eq("group_id", thread.group_id)
-        .eq("user_id", profile.id)
-        .single();
-      if (!membership) throw new TRPCError({ code: "FORBIDDEN" });
+      const thread = await assertThreadAccess(admin, input.threadId, profile.id);
+      // Did the marker actually move past new activity? Lets the client skip
+      // unread-count invalidations when nothing changed.
+      const changed =
+        !thread.last_read_at ||
+        new Date(thread.last_read_at).getTime() < new Date(thread.updated_at).getTime();
 
       const { error } = await admin
         .from("thread_reads")
@@ -299,7 +282,7 @@ export const threadsRouter = router({
         );
       if (error) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: error.message });
 
-      return { success: true };
+      return { success: true, changed };
     }),
 
   // Mark every thread in every group the caller belongs to as read. Upserts a
@@ -376,28 +359,16 @@ export const threadsRouter = router({
   reads: protectedProcedure
     .input(z.object({ threadId: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
-      const { supabase, profile } = ctx;
+      const { profile } = ctx;
       const admin = createAdminClient();
 
-      const { data: thread } = await supabase
-        .from("threads")
-        .select("group_id")
-        .eq("id", input.threadId)
-        .single();
-      if (!thread) throw new TRPCError({ code: "NOT_FOUND" });
-
-      const { data: membership } = await supabase
-        .from("group_memberships")
-        .select("id")
-        .eq("group_id", thread.group_id)
-        .eq("user_id", profile.id)
-        .single();
-      if (!membership) throw new TRPCError({ code: "FORBIDDEN" });
-
-      const { data, error } = await admin
-        .from("thread_reads")
-        .select("user_id, last_read_at, profiles(id, display_name, avatar_url)")
-        .eq("thread_id", input.threadId);
+      const [, { data, error }] = await Promise.all([
+        assertThreadAccess(admin, input.threadId, profile.id),
+        admin
+          .from("thread_reads")
+          .select("user_id, last_read_at, profiles(id, display_name, avatar_url)")
+          .eq("thread_id", input.threadId),
+      ]);
       if (error) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: error.message });
 
       return (data ?? []).map((r) => {
