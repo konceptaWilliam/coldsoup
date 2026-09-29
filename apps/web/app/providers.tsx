@@ -19,6 +19,7 @@ import { PresenceProvider } from "@/lib/presence-context";
 import { ThemeProvider } from "@/lib/theme-context";
 import { PwaManager } from "@/components/pwa-manager";
 import { trimPersistedMessages } from "@/lib/thread-cache";
+import { shouldPersistQuery } from "@/lib/persist-policy";
 
 function getBaseUrl() {
   if (typeof window !== "undefined") return "";
@@ -76,6 +77,8 @@ export function Providers({ children }: { children: React.ReactNode }) {
     createSyncStoragePersister({
       storage: typeof window !== "undefined" ? window.localStorage : undefined,
       key: "coldsoup-query-cache",
+      // Writes stringify the whole cache on the main thread; batch them.
+      throttleTime: 3000,
       // Only the newest page of each thread is persisted; older pages scrolled
       // into view stay in memory for the session.
       serialize: (client) =>
@@ -144,7 +147,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
             maxAge: WEEK,
             buster: CACHE_BUSTER,
             dehydrateOptions: {
-              shouldDehydrateQuery: (q) => q.state.status === "success",
+              shouldDehydrateQuery: (q) => shouldPersistQuery(q.queryKey, q.state.status),
             },
           }}
         >
