@@ -4,6 +4,22 @@ import { Resend } from "resend";
 import { router, protectedProcedure } from "../trpc";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { profileUpdateInput } from "@/lib/profile-policy";
+import {
+  blobStateFromRow,
+  chance,
+  EVOLUTION,
+  formShape,
+  isShape,
+  pickWeighted,
+  rerollPool,
+  rerollReady,
+  SHINY3_ODDS,
+  type BlobState,
+} from "@/lib/blob-evolution";
+import { baseShapeOf } from "@/lib/blob-base";
+import { cryptoRand } from "@/lib/blob-server";
+
+const BLOB_COLUMNS = "id, blob_level, blob_form, blob_shiny2, blob_shiny3, blob_lv3_shape";
 
 export const profileRouter = router({
   get: protectedProcedure.query(async ({ ctx }) => {
@@ -107,6 +123,120 @@ export const profileRouter = router({
     const admin = createAdminClient();
     await admin.from("profiles").update({ intro_seen: true }).eq("id", profile.id);
     return { success: true };
+  }),
+
+  // Blob state for everyone who shares a group with the caller (and the caller).
+  blobs: protectedProcedure.query(async ({ ctx }) => {
+    const admin = createAdminClient();
+    const { data: mine } = await admin
+      .from("group_memberships")
+      .select("group_id")
+      .eq("user_id", ctx.profile.id);
+    const groupIds = (mine ?? []).map((r) => r.group_id as string);
+    const { data: peers } = groupIds.length
+      ? await admin.from("group_memberships").select("user_id").in("group_id", groupIds)
+      : { data: [] as { user_id: string }[] };
+    const ids = Array.from(new Set([ctx.profile.id, ...(peers ?? []).map((r) => r.user_id as string)]));
+
+    const { data, error } = await admin.from("profiles").select(BLOB_COLUMNS).in("id", ids);
+    if (error) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: error.message });
+
+    const out: Record<string, BlobState> = {};
+    for (const row of data ?? []) out[row.id as string] = blobStateFromRow(row);
+    return out;
+  }),
+
+  // The caller's own blob, plus the counters only Settings needs.
+  myBlob: protectedProcedure.query(async ({ ctx }) => {
+    const admin = createAdminClient();
+    const { data, error } = await admin
+      .from("profiles")
+      .select(`${BLOB_COLUMNS}, blob_xp, blob_reroll_xp`)
+      .eq("id", ctx.profile.id)
+      .single();
+    if (error) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: error.message });
+    return {
+      ...blobStateFromRow(data),
+      xp: (data.blob_xp as number) ?? 0,
+      rerollXp: (data.blob_reroll_xp as number) ?? 0,
+    };
+  }),
+
+  setBlobForm: protectedProcedure
+    .input(z.object({ form: z.union([z.literal(1), z.literal(2), z.literal(3)]) }))
+    .mutation(async ({ ctx, input }) => {
+      const admin = createAdminClient();
+      const { data } = await admin
+        .from("profiles")
+        .update({ blob_form: input.form })
+        .eq("id", ctx.profile.id)
+        .gte("blob_level", input.form)
+        .select("id");
+      if (!data?.length) throw new TRPCError({ code: "BAD_REQUEST", message: "Form not unlocked yet" });
+      return { form: input.form };
+    }),
+
+  // New Lv3 shape + a 1-in-4 shiny roll. Guarded by an optimistic check on
+  // blob_reroll_xp so a double-click or race spends at most one charge.
+  rerollLv3: protectedProcedure.mutation(async ({ ctx }) => {
+    const admin = createAdminClient();
+    const { data: row } = await admin
+      .from("profiles")
+      .select("blob_level, blob_shiny3, blob_xp, blob_reroll_xp, blob_lv3_shape")
+      .eq("id", ctx.profile.id)
+      .single();
+    if (
+      !row ||
+      !rerollReady({
+        level: row.blob_level as number,
+        shiny3: row.blob_shiny3 as boolean,
+        xp: row.blob_xp as number,
+        rerollXp: row.blob_reroll_xp as number,
+      })
+    ) {
+      throw new TRPCError({ code: "PRECONDITION_FAILED", message: "No reroll charge yet" });
+    }
+
+    const base = baseShapeOf(ctx.profile.id);
+    const previous = formShape(base, 3, isShape(row.blob_lv3_shape) ? row.blob_lv3_shape : null);
+    const shape = pickWeighted(rerollPool(base, EVOLUTION[base][0], previous), cryptoRand);
+    const shiny = chance(SHINY3_ODDS, cryptoRand);
+
+    const updates = shiny
+      ? { blob_reroll_xp: row.blob_xp, blob_lv3_shape: shape, blob_shiny3: true, blob_pending_shape: null }
+      : { blob_reroll_xp: row.blob_xp, blob_pending_shape: shape };
+    const { data: done } = await admin
+      .from("profiles")
+      .update(updates)
+      .eq("id", ctx.profile.id)
+      .eq("blob_reroll_xp", row.blob_reroll_xp as number)
+      .eq("blob_shiny3", false)
+      .select("id");
+    if (!done?.length) {
+      throw new TRPCError({ code: "PRECONDITION_FAILED", message: "No reroll charge yet" });
+    }
+    return { previous, shape, shiny };
+  }),
+
+  // After a missed reroll: adopt the rolled shape. Only the server-rolled
+  // pending shape can be kept; users never write a shape directly.
+  keepLv3Shape: protectedProcedure.mutation(async ({ ctx }) => {
+    const admin = createAdminClient();
+    const { data: row } = await admin
+      .from("profiles")
+      .select("blob_pending_shape")
+      .eq("id", ctx.profile.id)
+      .single();
+    const pending = row?.blob_pending_shape;
+    if (!isShape(pending)) {
+      throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Nothing to keep" });
+    }
+    await admin
+      .from("profiles")
+      .update({ blob_lv3_shape: pending, blob_pending_shape: null })
+      .eq("id", ctx.profile.id)
+      .eq("blob_pending_shape", pending);
+    return { shape: pending };
   }),
 
   sendPasswordChangedEmail: protectedProcedure.mutation(async ({ ctx }) => {
