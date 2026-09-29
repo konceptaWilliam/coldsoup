@@ -17,6 +17,34 @@ export function isShellPath(path: string): boolean {
   return SHELL_RE.test(path.split(/[?#]/)[0]);
 }
 
+function stripQuery(path: string): string {
+  return path.split(/[?#]/)[0];
+}
+
+// Shell history is at most two levels: a group list (depth 0) and one thread
+// on top (depth 1). Back from a thread therefore always means "that thread's
+// list", however the thread was reached.
+export type NavOp = "push" | "replace" | "back";
+
+export function planNavigation(currentDepth: number, targetPath: string): NavOp {
+  const toThread = parseShellRoute(stripQuery(targetPath)).threadId !== null;
+  if (currentDepth > 0) return toThread ? "replace" : "back";
+  return toThread ? "push" : "replace";
+}
+
+// After a pop that left a thread, the path the shell should show instead of
+// the landed one, or null when the landing is already right (or not ours).
+export function resolvePop(
+  lastRoute: ShellRoute | null,
+  landedPath: string,
+  pendingTarget: string | null
+): string | null {
+  if (!isShellPath(landedPath)) return null;
+  if (!lastRoute?.threadId) return null;
+  const desired = pendingTarget ?? `/g/${lastRoute.groupId}`;
+  return landedPath === desired ? null : desired;
+}
+
 // pushState is only safe while the shell is mounted: from any other page the
 // app router would keep rendering that page under the new URL.
 let shellMounted = false;
