@@ -1,12 +1,17 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { Blobatar } from "@blobatar/react";
 import type { Expression } from "blobatar";
 import { gaze } from "blobatar/gaze";
 import { resolveBlobatar, type BlobatarAnimate } from "@/lib/avatar";
+import { formLook, type FormLook } from "@/lib/blob-evolution";
+import { baseShapeOf } from "@/lib/blob-base";
+import { useBlob } from "@/lib/use-blob";
+import { BlobForm } from "@/components/blob-form";
 
-// Every user's avatar is their blobatar — profile photos are not supported.
+const LV1: FormLook = { shape: null, finish: "plain" };
+
+// Every user's avatar is their blobatar, drawn in the form they have equipped.
 export function Avatar({
   userId,
   name,
@@ -35,17 +40,23 @@ export function Avatar({
     size,
     animate: expression || followPointer ? "always" : animate,
   });
+  const state = useBlob(userId);
+  // Unknown users keep the neutral blob; levels only apply to real ids.
+  const look = blob.palette ? LV1 : formLook(baseShapeOf(blob.name), state.form, state);
 
   // `useGaze()` hands back a ref for <Blobatar ref>, which React 18 function
-  // components never receive, so drive the svg directly instead.
+  // components never receive, so drive the svgs directly instead. A finish
+  // stacks several copies of the blob; every copy gets its own driver so the
+  // eyes on each layer move together.
   useEffect(() => {
     if (!followPointer || !blob.animate) return;
-    const svg = wrapRef.current?.querySelector("svg");
-    if (!svg) return;
-    svg.style.setProperty("--mo-track-travel", "3px");
-    const g = gaze(svg, { target: "pointer" });
-    return () => g.stop();
-  }, [followPointer, blob.animate, blob.name]);
+    const svgs = Array.from(wrapRef.current?.querySelectorAll("svg") ?? []);
+    const drivers = svgs.map((svg) => {
+      svg.style.setProperty("--mo-track-travel", "3px");
+      return gaze(svg, { target: "pointer" });
+    });
+    return () => drivers.forEach((g) => g.stop());
+  }, [followPointer, blob.animate, blob.name, look.shape, look.finish]);
 
   return (
     <span
@@ -58,27 +69,15 @@ export function Avatar({
       }}
       title={name}
     >
-      {blob.animate ? (
-        <Blobatar
-          name={blob.name}
-          palette={blob.palette}
-          animate={blob.animate}
-          expression={expression}
-          size={size}
-          background={false}
-          title={name}
-        />
-      ) : (
-        <Blobatar
-          name={blob.name}
-          palette={blob.palette}
-          expression={expression}
-          size={size}
-          background={false}
-          title={name}
-          alt={name}
-        />
-      )}
+      <BlobForm
+        name={blob.name}
+        palette={blob.palette}
+        look={look}
+        size={size}
+        animate={blob.animate}
+        expression={expression}
+        title={name}
+      />
     </span>
   );
 }
