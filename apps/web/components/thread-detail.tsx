@@ -13,10 +13,10 @@ import { navigateBack } from "@/lib/shell-route";
 import { SWIPE_EDGE_PX } from "@/lib/swipe";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import { trpc } from "@/lib/trpc/client";
-import { createClient, setRealtimeAuth, getPresenceClient } from "@/lib/supabase/client";
+import { createClient, getPresenceClient } from "@/lib/supabase/client";
 import { useUnread } from "@/lib/unread-context";
 import { useOnline } from "@/lib/presence-context";
-import { validateFile, resizeImageIfNeeded, attachmentTypeFor } from "@/lib/file-utils";
+import { validateFile } from "@/lib/file-utils";
 import { haptic } from "@/lib/haptics";
 import { playSend, playReceive } from "@/lib/sound";
 import { SMeterCard, SMeterCreateModal, SMeterResultsLink, type SMeterSummary } from "@/components/smeter";
@@ -26,33 +26,18 @@ import { BlobForm } from "@/components/blob-form";
 import { BlobLevel } from "@/components/blob-level";
 import { EvolveModal, evolveSpec, type RevealSpec } from "@/components/evolve-modal";
 import { isShape } from "@/lib/blob-evolution";
-
-type ThreadStatus = "OPEN" | "URGENT" | "DONE";
-
-type Attachment = {
-  url: string;
-  type: "image" | "audio" | "video" | "file";
-  name: string;
-};
-
-type Reaction = {
-  type: string;
-  count: number;
-  userReacted: boolean;
-  users: string[];
-};
-
-type ReactionType = "👍" | "👎" | "❤️" | "🎉" | "😂" | "❓";
-const REACTION_TYPES: ReactionType[] = ["👍", "👎", "❤️", "🎉", "😂", "❓"];
-
-type ReplyTo = {
-  id: string;
-  body: string;
-  author_name: string;
-  // Specific image of the replied-to message, when the reply was started from
-  // an image. Null for text replies / non-image messages.
-  image_url: string | null;
-};
+import {
+  REACTION_DEFAULTS,
+  REACTION_TYPES,
+  type Attachment,
+  type Message,
+  type PollData,
+  type ReplyTo,
+  type ThreadStatus,
+} from "@/lib/thread-types";
+import { useThreadMessages } from "@/lib/use-thread-messages";
+import { flatten } from "@/lib/thread-cache";
+import { localPreview } from "@/lib/local-previews";
 
 // Message context needed to start a reply from an image (lightbox / hold menu).
 // The specific image url is supplied at reply time (the lightbox can swipe to a
@@ -63,78 +48,12 @@ type ReplyTarget = {
   authorName: string;
 };
 
-const REACTION_DEFAULTS: Reaction[] = REACTION_TYPES.map((type) => ({
-  type,
-  count: 0,
-  userReacted: false,
-  users: [],
-}));
-
-type PollVoter = {
-  id: string;
-  display_name: string;
-  avatar_url: string | null;
-};
-
-type PollOption = {
-  id: string;
-  text: string;
-  vote_count: number;
-  user_voted: boolean;
-  voters: PollVoter[];
-};
-
-type PollData = {
-  id: string;
-  question: string;
-  options: PollOption[];
-};
-
-type Message = {
-  id: string;
-  body: string;
-  created_at: string;
-  edited_at: string | null;
-  is_deleted: boolean;
-  user_id: string | null;
-  thread_id: string;
-  client_id?: string | null;
-  poll_id: string | null;
-  poll: PollData | null;
-  smeter_id: string | null;
-  smeter: SMeterSummary | null;
-  system_event: SystemEvent | null;
-  attachments: Attachment[];
-  reactions: Reaction[];
-  reply_to_id: string | null;
-  reply_to: ReplyTo | null;
-  profiles: {
-    id: string;
-    display_name: string;
-    avatar_url: string | null;
-  } | null;
-  delivery_status?: "sending" | "failed";
-  fail_id?: string;
-};
-
-type FailedEntry = {
-  failId: string;
-  clientId: string;
-  body: string;
-  attachments: Attachment[];
-  replyToId?: string;
-  replyToAttachmentUrl?: string | null;
-  replyTo: ReplyTo | null;
-  created_at: string;
-};
-
 type ProfileTarget = {
   id: string | null;
   name: string;
 };
 
 const DRAFT_PREFIX = "coldsoup:draft:";
-const OUTBOX_PREFIX = "coldsoup:outbox:";
 const BOTTOM_THRESHOLD_PX = 120;
 
 function isScrolledNearBottom(container: HTMLElement): boolean {
@@ -146,10 +65,6 @@ function isScrolledNearBottom(container: HTMLElement): boolean {
 
 function draftKey(threadId: string) {
   return `${DRAFT_PREFIX}${threadId}`;
-}
-
-function outboxKey(threadId: string) {
-  return `${OUTBOX_PREFIX}${threadId}`;
 }
 
 function readDraft(threadId: string): string {
@@ -170,24 +85,6 @@ function writeDraft(threadId: string, value: string) {
 function clearDraft(threadId: string) {
   try {
     localStorage.removeItem(draftKey(threadId));
-  } catch {}
-}
-
-function readOutbox(threadId: string): FailedEntry[] {
-  try {
-    const raw = localStorage.getItem(outboxKey(threadId));
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? (parsed as FailedEntry[]) : [];
-  } catch {
-    return [];
-  }
-}
-
-function writeOutbox(threadId: string, entries: FailedEntry[]) {
-  try {
-    if (entries.length === 0) localStorage.removeItem(outboxKey(threadId));
-    else localStorage.setItem(outboxKey(threadId), JSON.stringify(entries));
   } catch {}
 }
 
@@ -233,23 +130,20 @@ function SystemMessage({ event, threadId }: { event: SystemEvent; threadId: stri
 
 function PollView({
   poll: initialPoll,
-  threadId,
   myInfo,
 }: {
   poll: PollData;
-  threadId: string;
   myInfo: {
     id: string;
     display_name: string;
     avatar_url: string | null;
   } | null;
 }) {
-  const utils = trpc.useUtils();
   const [poll, setPoll] = useState(initialPoll);
   const [newOptionText, setNewOptionText] = useState("");
   const [showAddOption, setShowAddOption] = useState(false);
 
-  // Sync local state when server data updates (after invalidation)
+  // Sync local state when the cached poll is patched (realtime refresh)
   useEffect(() => {
     setPoll(initialPoll);
   }, [initialPoll]);
@@ -286,14 +180,12 @@ function PollView({
     onError: (_, __, ctx) => {
       if (ctx?.prev) setPoll(ctx.prev);
     },
-    onSuccess: () => utils.messages.list.invalidate({ threadId }),
   });
 
   const addOption = trpc.polls.addOption.useMutation({
     onSuccess: () => {
       setNewOptionText("");
       setShowAddOption(false);
-      utils.messages.list.invalidate({ threadId });
     },
   });
 
@@ -1163,7 +1055,7 @@ function ThreadImage({
     >
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
-        src={att.url}
+        src={localPreview(att.url) ?? att.url}
         alt={att.name}
         draggable={false}
         className="block h-auto w-full"
@@ -1882,8 +1774,7 @@ function StatusControl({
           <button
             key={s}
             onClick={() => handleClick(s)}
-            disabled={updateStatus.isPending}
-            className={`relative z-10 flex-1 min-w-0 flex items-center justify-center font-mono text-[10px] uppercase tracking-[0.12em] px-2.5 py-2.5 md:py-[5px] transition-colors duration-200 border-r last:border-r-0 border-border disabled:opacity-40 ${
+            className={`relative z-10 flex-1 min-w-0 flex items-center justify-center font-mono text-[10px] uppercase tracking-[0.12em] px-2.5 py-2.5 md:py-[5px] transition-colors duration-200 border-r last:border-r-0 border-border ${
               active ? "" : "text-muted hover:text-ink"
             }`}
             style={active ? { color: activeStyle(s).color } : undefined}
@@ -1911,20 +1802,9 @@ export function ThreadDetail({
   highlightMessageId?: string;
   me: { id: string; display_name: string; avatar_url: string | null };
 }) {
-  // Message ids present at load time — these render instantly (no fade). Only
-  // messages that arrive later (realtime / sent) animate in.
-  const noAnimateIds = useRef<Set<string>>(new Set());
-  // First paint comes straight from the React Query cache (warmed by
-  // prefetch / persistence), so a cached thread never flashes empty.
-  const cacheUtils = trpc.useUtils();
-  const cachedPage = cacheUtils.messages.list.getData({ threadId }) as unknown as
-    | { messages: Message[]; hasMore: boolean }
-    | undefined;
-  const [messages, setMessages] = useState<Message[]>(() => {
-    const msgs = cachedPage?.messages ?? [];
-    for (const m of msgs) noAnimateIds.current.add(m.id);
-    return msgs;
-  });
+  // Row keys that should play the enter animation: messages that arrive while
+  // the thread is open (realtime or sent here). Everything else renders still.
+  const animateKeys = useRef<Set<string>>(new Set());
   const [body, setBody] = useState("");
   // True while the soft keyboard is up — used to drop the composer's safe-area
   // bottom padding (otherwise it leaves a gap between the input and keyboard).
@@ -1948,6 +1828,32 @@ export function ThreadDetail({
   // Provided by the shell (server-fetched once per app load) — no auth or
   // profile round trip before realtime channels and own-message UI work.
   const myInfo = me;
+
+  const { data: workspaceMembers } = trpc.messages.groupMembers.useQuery(
+    { groupId },
+    { refetchOnWindowFocus: false, staleTime: 5 * 60 * 1000 },
+  );
+
+  const thread = useThreadMessages({
+    threadId,
+    groupId,
+    me,
+    members: workspaceMembers,
+    callbacks: {
+      onIncoming: (m) => {
+        animateKeys.current.add(m.client_id ?? m.id);
+        playReceive();
+        if (mentionsUser(m.body, me.display_name)) haptic(MENTION_HAPTIC);
+      },
+      onDelivered: (m) => flashMood(m.id, happy, 1200),
+      onLovedMine: (id) => flashMood(id, love, 2000),
+      onLevelUp: (up) => {
+        void utils.profile.blobs.invalidate();
+        setReveal(evolveSpec(me.id, myBlob, up.level, up.shiny));
+      },
+    },
+  });
+  const messages = thread.messages;
   const presenceChannelRef = useRef<RealtimeChannel | null>(null);
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [threadStatus, setThreadStatus] = useState<ThreadStatus>(initialStatus);
@@ -1968,7 +1874,6 @@ export function ThreadDetail({
   const recordChunksRef = useRef<Blob[]>([]);
   const recordTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const recordStreamRef = useRef<MediaStream | null>(null);
-  const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [activeLightbox, setActiveLightbox] = useState<{
     images: Attachment[];
@@ -1982,21 +1887,15 @@ export function ThreadDetail({
   const [activeTooltip, setActiveTooltip] = useState<string | null>(null);
   const tooltipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const outboxLoadedRef = useRef(false);
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
   const [showPollCreate, setShowPollCreate] = useState(false);
   const [showSMeterCreate, setShowSMeterCreate] = useState(false);
-  const [failedSends, setFailedSends] = useState<FailedEntry[]>([]);
   const [profileTarget, setProfileTarget] = useState<ProfileTarget | null>(null);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [activeMessageMenuId, setActiveMessageMenuId] = useState<string | null>(null);
-  const [hasMore, setHasMore] = useState(() => cachedPage?.hasMore ?? false);
-  const [isLoadingMore, setIsLoadingMore] = useState(false);
   // Flash highlight for jump-to-message (reply quotes, search deep-links).
   const [jumpFlashId, setJumpFlashId] = useState<string | null>(null);
   const jumpBusyRef = useRef(false);
-  // Aggregate attachment upload progress, 0..1 (null = not uploading).
-  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [hasNewMessages, setHasNewMessages] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -2011,15 +1910,8 @@ export function ThreadDetail({
   // keyboard) on touch devices.
   const suppressKbDismissRef = useRef(0);
   const isInitialLoad = useRef(true);
-  // True once the realtime channel has joined at least once; lets us tell a
-  // reconnect apart from the initial subscribe so we only backfill on reconnect.
-  const hasSubscribedRef = useRef(false);
   // Throttle typing presence: only broadcast typing:true on the leading edge.
   const typingActiveRef = useRef(false);
-  // Latest outbox + retry fn in refs so the "online" listener (bound once) can
-  // flush without re-binding on every state change.
-  const failedSendsRef = useRef<FailedEntry[]>([]);
-  const retryFailedRef = useRef<(entry: FailedEntry) => void>(() => {});
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const longPressStartRef = useRef<{ x: number; y: number } | null>(null);
   // True while a programmatic (auto/smooth) scroll is settling. Scroll events it
@@ -2112,6 +2004,34 @@ export function ThreadDetail({
       behavior === "auto" ? 120 : 700,
     );
   }, []);
+
+  // Older history: load ~600px before the top, keep the viewport anchored.
+  const olderSentinelRef = useRef<HTMLDivElement>(null);
+  const preLoadScrollHeight = useRef<number | null>(null);
+  const loadOlderRef = useRef(thread.loadOlder);
+  loadOlderRef.current = thread.loadOlder;
+  const canLoadOlder = thread.hasMore && !thread.isLoadingOlder && !thread.olderError;
+  useEffect(() => {
+    const root = scrollContainerRef.current;
+    const target = olderSentinelRef.current;
+    if (!root || !target || !canLoadOlder) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((e) => e.isIntersecting)) return;
+        preLoadScrollHeight.current = root.scrollHeight;
+        void loadOlderRef.current();
+      },
+      { root, rootMargin: "600px 0px 0px 0px" },
+    );
+    io.observe(target);
+    return () => io.disconnect();
+  }, [canLoadOlder]);
+  useIsoLayoutEffect(() => {
+    const root = scrollContainerRef.current;
+    if (!root || preLoadScrollHeight.current === null) return;
+    root.scrollTop += root.scrollHeight - preLoadScrollHeight.current;
+    preLoadScrollHeight.current = null;
+  }, [thread.pageCount]);
 
   const updateScrollState = useCallback(() => {
     const container = scrollContainerRef.current;
@@ -2225,47 +2145,16 @@ export function ThreadDetail({
     };
   }, [body, editingMessageId, threadId]);
 
-  useEffect(() => {
-    outboxLoadedRef.current = false;
-    setFailedSends(readOutbox(threadId));
-    outboxLoadedRef.current = true;
-  }, [threadId]);
-
-  useEffect(() => {
-    if (!outboxLoadedRef.current) return;
-    writeOutbox(threadId, failedSends);
-  }, [failedSends, threadId]);
-
-  // Auto-flush the outbox when connectivity returns — local-first: queue while
-  // offline, resend on reconnect (no manual retry needed).
-  useEffect(() => {
-    const onOnline = () => {
-      const entries = failedSendsRef.current;
-      entries.forEach((entry) => retryFailedRef.current(entry));
-    };
-    window.addEventListener("online", onOnline);
-    return () => window.removeEventListener("online", onOnline);
-  }, []);
-
   const createPoll = trpc.polls.create.useMutation({
     onSuccess: (msg) => {
       haptic("light");
-      setMessages((prev) => [
-        ...prev,
-        {
-          ...(msg as unknown as Message),
-          poll_id:
-            (msg as unknown as { poll_id: string | null }).poll_id ?? null,
-          poll: null,
-          smeter_id: null,
-          smeter: null,
-          system_event: null,
-          reactions: REACTION_DEFAULTS.map((r) => ({ ...r })),
-          reply_to: null,
-        },
-      ]);
+      thread.addServerMessage({
+        ...(msg as unknown as Message),
+        poll_id: (msg as unknown as { poll_id: string | null }).poll_id ?? null,
+        reactions: REACTION_DEFAULTS.map((r) => ({ ...r })),
+      });
+      // The realtime INSERT echo fetches the poll payload and upserts it.
       setShowPollCreate(false);
-      utils.messages.list.invalidate({ threadId });
     },
     onError: () => {
       forceScrollOnNextMessageRef.current = false;
@@ -2281,125 +2170,18 @@ export function ThreadDetail({
         const map = await utils.smeters.getMany.fetch({ smeterIds: [smeterId] }, { staleTime: 0 });
         smeter = map[smeterId] ?? null;
       }
-      // The await above lets the realtime INSERT echo land first, so dedupe by
-      // id — otherwise the card flashes twice until the next refetch.
-      const newId = (msg as unknown as { id: string }).id;
-      setMessages((prev) =>
-        prev.some((m) => m.id === newId)
-          ? prev
-          : [
-              ...prev,
-              {
-                ...(msg as unknown as Message),
-                poll_id: null,
-                poll: null,
-                smeter_id: smeterId,
-                smeter,
-                system_event: null,
-                reactions: REACTION_DEFAULTS.map((r) => ({ ...r })),
-                reply_to: null,
-              },
-            ]
-      );
+      thread.addServerMessage({
+        ...(msg as unknown as Message),
+        smeter_id: smeterId,
+        smeter,
+        reactions: REACTION_DEFAULTS.map((r) => ({ ...r })),
+      });
       setShowSMeterCreate(false);
-      utils.messages.list.invalidate({ threadId });
     },
     onError: () => {
       forceScrollOnNextMessageRef.current = false;
     },
   });
-
-  const toggleReaction = trpc.messages.toggleReaction.useMutation({
-    onMutate: ({ messageId, type }) => {
-      haptic("light");
-      const myName = myInfo?.display_name ?? null;
-      setMessages((prev) =>
-        prev.map((m) => {
-          if (m.id !== messageId) return m;
-          return {
-            ...m,
-            reactions: m.reactions.map((r) => {
-              if (r.type !== type) return r;
-              const adding = !r.userReacted;
-              return {
-                ...r,
-                count: adding ? r.count + 1 : r.count - 1,
-                userReacted: adding,
-                users: myName
-                  ? adding
-                    ? [...r.users, myName]
-                    : r.users.filter((n) => n !== myName)
-                  : r.users,
-              };
-            }),
-          };
-        }),
-      );
-    },
-    onError: () => {
-      utils.messages.list.invalidate({ threadId });
-    },
-    // Optimistic state lives only in local `setMessages`; the query cache keeps
-    // the pre-reaction load. With staleTime 30s, a quick leave/return serves
-    // that stale cache and the reaction vanishes. Invalidate so the cache
-    // re-reads the persisted reaction from the server.
-    onSettled: () => {
-      utils.messages.list.invalidate({ threadId });
-    },
-  });
-
-  const deleteMessage = trpc.messages.deleteMessage.useMutation({
-    onMutate: ({ messageId }) => {
-      haptic("warning");
-      setMessages((prev) =>
-        prev.map((m) => (m.id === messageId ? { ...m, is_deleted: true } : m)),
-      );
-    },
-    onError: () => {
-      utils.messages.list.invalidate({ threadId });
-    },
-    // Local-only optimistic edit; sync the query cache so a quick leave/return
-    // within staleTime doesn't resurrect the deleted message from stale cache.
-    onSettled: () => {
-      utils.messages.list.invalidate({ threadId });
-    },
-  });
-
-  const editMessage = trpc.messages.edit.useMutation({
-    onSuccess: (updated) => {
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === updated.id
-            ? { ...m, body: updated.body, edited_at: updated.edited_at }
-            : m,
-        ),
-      );
-      setEditingMessageId(null);
-      setEditBody("");
-    },
-    // Sync the query cache so a quick leave/return within staleTime doesn't show
-    // the pre-edit body from stale cache.
-    onSettled: () => {
-      utils.messages.list.invalidate({ threadId });
-    },
-  });
-
-  const { data: workspaceMembers } = trpc.messages.groupMembers.useQuery(
-    { groupId },
-    { refetchOnWindowFocus: false, staleTime: 5 * 60 * 1000 },
-  );
-
-  // Latest members in a ref so the realtime INSERT handler can resolve a
-  // sender's profile locally (no per-message DB round-trip) without re-binding
-  // the channel on every member-list change.
-  const membersRef = useRef(workspaceMembers);
-  membersRef.current = workspaceMembers;
-
-  // myInfo mirrored in a ref so the realtime INSERT handler (whose effect does
-  // not depend on myInfo) reads the current value instead of the stale closure
-  // captured when the channel first subscribed.
-  const myInfoRef = useRef(myInfo);
-  myInfoRef.current = myInfo;
 
   const mentionSuggestions = useMemo(() => {
     if (mentionQuery === null || !workspaceMembers) return [];
@@ -2414,36 +2196,6 @@ export function ThreadDetail({
     return [...specials, ...matched];
   }, [mentionQuery, workspaceMembers]);
 
-  const { data: loadedMessages } = trpc.messages.list.useQuery(
-    { threadId },
-    { refetchOnWindowFocus: false },
-  );
-
-  useEffect(() => {
-    if (loadedMessages) {
-      const { messages: msgs, hasMore: more } = loadedMessages as unknown as {
-        messages: Message[];
-        hasMore: boolean;
-      };
-      // Mark the loaded batch as no-animate so it renders instantly.
-      for (const m of msgs) noAnimateIds.current.add(m.id);
-      // Merge: keep any still-pending optimistic sends that the server batch
-      // doesn't yet include (a refetch/backfill must not drop in-flight temps).
-      setMessages((prev) => {
-        const pending = prev.filter(
-          (m) =>
-            m.delivery_status === "sending" &&
-            !msgs.some(
-              (s) =>
-                s.id === m.id ||
-                (!!m.client_id && s.client_id === m.client_id),
-            ),
-        );
-        return pending.length ? [...msgs, ...pending] : msgs;
-      });
-      setHasMore(more);
-    }
-  }, [loadedMessages]);
 
   useIsoLayoutEffect(() => {
     const count = messages.length;
@@ -2545,50 +2297,6 @@ export function ThreadDetail({
     gazeFieldRef.current?.refresh();
   }, [messages]);
 
-  // Live reactions. Own channel on purpose: if message_reactions isn't in the
-  // realtime publication yet (migration 035), only this channel is rejected,
-  // never the messages channel (see migration 015).
-  const messageIdsRef = useRef<Set<string>>(new Set());
-  const messagesRef = useRef<Message[]>([]);
-  useEffect(() => {
-    messagesRef.current = messages;
-    messageIdsRef.current = new Set(messages.map((m) => m.id));
-  }, [messages]);
-  const myId = myInfo?.id;
-  useEffect(() => {
-    if (!myId) return;
-    const supabase = createClient();
-    let refetchTimer: ReturnType<typeof setTimeout> | null = null;
-    const channel = supabase
-      .channel(`reactions:${threadId}`)
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "message_reactions" },
-        (payload) => {
-          const row = (payload.new && "message_id" in payload.new ? payload.new : payload.old) as {
-            message_id?: string;
-            user_id?: string;
-            type?: string;
-          } | null;
-          if (!row?.message_id || !messageIdsRef.current.has(row.message_id)) return;
-          if (row.user_id === myId) return; // own reactions are optimistic already
-          if (payload.eventType === "INSERT" && row.type === "❤️") {
-            const target = messagesRef.current.find((m) => m.id === row.message_id);
-            if (target?.user_id === myId) flashMood(row.message_id, love, 2000);
-          }
-          // Coalesce bursts into one refetch of the thread's reaction counts.
-          if (refetchTimer) clearTimeout(refetchTimer);
-          refetchTimer = setTimeout(() => {
-            utils.messages.list.invalidate({ threadId });
-          }, 400);
-        },
-      )
-      .subscribe();
-    return () => {
-      if (refetchTimer) clearTimeout(refetchTimer);
-      supabase.removeChannel(channel);
-    };
-  }, [threadId, myId, flashMood, utils.messages.list]);
 
 
   useEffect(() => {
@@ -2646,291 +2354,6 @@ export function ThreadDetail({
     };
   }, [threadId, myInfo]);
 
-  // Realtime: new messages + edits
-  useEffect(() => {
-    const supabase = createClient();
-    let channel: ReturnType<typeof supabase.channel> | null = null;
-    let cancelled = false;
-
-    (async () => {
-      // Ensure the realtime socket carries the user JWT BEFORE the channel
-      // joins, otherwise postgres_changes joins as anon and RLS filters every
-      // event (channel still reports SUBSCRIBED, just delivers nothing).
-      const { data } = await supabase.auth.getSession();
-      const token = data.session?.access_token;
-      if (token) setRealtimeAuth(supabase, token);
-      if (cancelled) return;
-
-    // Re-fetch poll data for every poll in this thread and merge into state.
-    // poll_votes/poll_options carry no thread_id, so refresh all thread polls.
-    const refreshThreadPolls = async () => {
-      let pollIds: string[] = [];
-      setMessages((prev) => {
-        pollIds = prev.filter((m) => m.poll_id).map((m) => m.poll_id as string);
-        return prev;
-      });
-      if (pollIds.length === 0) return;
-      // Bypass the query cache — staleTime would otherwise return the poll's
-      // previous (pre-vote) data and the merge would be a no-op.
-      const map = await utils.polls.getMany.fetch({ pollIds }, { staleTime: 0 });
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.poll_id && map[m.poll_id] ? { ...m, poll: map[m.poll_id] } : m,
-        ),
-      );
-    };
-
-    // Same idea for S-meters: votes land in smeter_responses (no thread_id),
-    // so refresh every S-meter card's summary in this thread.
-    const refreshThreadSmeters = async () => {
-      let smeterIds: string[] = [];
-      setMessages((prev) => {
-        smeterIds = prev.filter((m) => m.smeter_id).map((m) => m.smeter_id as string);
-        return prev;
-      });
-      if (smeterIds.length === 0) return;
-      const map = await utils.smeters.getMany.fetch({ smeterIds }, { staleTime: 0 });
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.smeter_id && map[m.smeter_id] ? { ...m, smeter: map[m.smeter_id] } : m,
-        ),
-      );
-    };
-
-    channel = supabase
-      .channel(`messages:thread:${threadId}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "messages",
-          filter: `thread_id=eq.${threadId}`,
-        },
-        async (payload) => {
-          const newMsg = payload.new as {
-            id: string;
-            body: string;
-            created_at: string;
-            edited_at: string | null;
-            is_deleted: boolean;
-            user_id: string;
-            thread_id: string;
-            client_id: string | null;
-            attachments: Attachment[];
-            reply_to_id: string | null;
-            reply_to_attachment_url: string | null;
-            poll_id: string | null;
-            smeter_id: string | null;
-            system_event: SystemEvent | null;
-          };
-
-          // Someone evolved: refresh everyone's blob forms.
-          if (newMsg.system_event?.kind === "blob_evolved") {
-            void utils.profile.blobs.invalidate();
-          }
-
-          // Defense-in-depth: the server-side filter already scopes to this
-          // thread, but keep the guard in case the binding falls back to
-          // table-wide delivery.
-          if (newMsg.thread_id !== threadId) return;
-
-          // Resolve the sender locally from the cached group members — avoids a
-          // DB round-trip per incoming message (the previous hot path). Fall
-          // back to a query only when the sender isn't in the cache yet.
-          let profile:
-            | { id: string; display_name: string; avatar_url: string | null }
-            | null =
-            membersRef.current?.find((m) => m.id === newMsg.user_id) ?? null;
-          if (!profile) {
-            const { data } = await supabase
-              .from("profiles")
-              .select("id, display_name, avatar_url")
-              .eq("id", newMsg.user_id)
-              .single();
-            profile = data ?? null;
-          }
-
-          // Poll messages carry no poll payload in the row — fetch it so the
-          // poll renders live instead of appearing blank until refresh.
-          let poll = null;
-          if (newMsg.poll_id) {
-            const map = await utils.polls.getMany.fetch(
-              { pollIds: [newMsg.poll_id] },
-              { staleTime: 0 },
-            );
-            poll = map[newMsg.poll_id] ?? null;
-          }
-
-          // S-meter messages carry no summary in the row — fetch it.
-          let smeter: SMeterSummary | null = null;
-          if (newMsg.smeter_id) {
-            const map = await utils.smeters.getMany.fetch(
-              { smeterIds: [newMsg.smeter_id] },
-              { staleTime: 0 },
-            );
-            smeter = map[newMsg.smeter_id] ?? null;
-          }
-
-          // Reply quote isn't in the row — fetch the replied-to message so the
-          // quote renders live instead of only after a reload.
-          let reply_to: ReplyTo | null = null;
-          if (newMsg.reply_to_id) {
-            const { data: replyMsg } = await supabase
-              .from("messages")
-              .select("id, body, profiles(display_name)")
-              .eq("id", newMsg.reply_to_id)
-              .single();
-            if (replyMsg) {
-              reply_to = {
-                id: replyMsg.id as string,
-                body: ((replyMsg.body as string) ?? "").slice(0, 120),
-                author_name:
-                  (replyMsg.profiles as unknown as { display_name: string } | null)
-                    ?.display_name ?? "Unknown",
-                // image_url is on the new (reply) row, not the target.
-                image_url: newMsg.reply_to_attachment_url ?? null,
-              };
-            }
-          }
-
-          setMessages((prev) => {
-            if (prev.some((m) => m.id === newMsg.id)) return prev;
-            const reconciled = {
-              ...newMsg,
-              is_deleted: newMsg.is_deleted ?? false,
-              poll_id: newMsg.poll_id ?? null,
-              poll,
-              smeter_id: newMsg.smeter_id ?? null,
-              smeter,
-              system_event: (newMsg.system_event ?? null) as SystemEvent | null,
-              profiles: profile ?? null,
-              reactions: REACTION_DEFAULTS.map((r) => ({ ...r })),
-              reply_to,
-            };
-            // If this is the realtime echo of our own optimistic message,
-            // replace the pending temp instead of appending a duplicate. Match
-            // on the client_id (deterministic) and fall back to the old
-            // body+user heuristic for messages sent before client_id existed.
-            const tempIdx = prev.findIndex((m) =>
-              m.delivery_status && newMsg.client_id
-                ? m.client_id === newMsg.client_id
-                : m.delivery_status &&
-                  m.user_id === newMsg.user_id &&
-                  m.body === newMsg.body &&
-                  (m.reply_to_id ?? null) === (newMsg.reply_to_id ?? null),
-            );
-            if (tempIdx !== -1) {
-              const copy = [...prev];
-              copy[tempIdx] = reconciled;
-              return copy;
-            }
-            return [...prev, reconciled];
-          });
-
-          // Feedback for a message from someone else, live in the thread: a
-          // soft receive sound, plus a distinct buzz if it @mentions me. Skip
-          // our own messages (and their realtime echo). Read myInfo via ref —
-          // the effect closure doesn't track it.
-          const me = myInfoRef.current;
-          if (me?.id && newMsg.user_id !== me.id) {
-            playReceive();
-            if (mentionsUser(newMsg.body, me.display_name)) {
-              haptic(MENTION_HAPTIC);
-            }
-          }
-        },
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "poll_votes" },
-        () => refreshThreadPolls(),
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "poll_options" },
-        () => refreshThreadPolls(),
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "smeter_responses" },
-        () => refreshThreadSmeters(),
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "messages",
-          filter: `thread_id=eq.${threadId}`,
-        },
-        (payload) => {
-          const updated = payload.new as {
-            id: string;
-            body: string;
-            edited_at: string | null;
-            is_deleted: boolean;
-            thread_id: string;
-          };
-          if (updated.thread_id !== threadId) return;
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === updated.id
-                ? {
-                    ...m,
-                    body: updated.body,
-                    edited_at: updated.edited_at ?? null,
-                    is_deleted: updated.is_deleted ?? false,
-                  }
-                : m,
-            ),
-          );
-        },
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "thread_reads",
-        },
-        (payload) => {
-          const row = (payload.new ?? payload.old) as { thread_id?: string } | null;
-          if (row?.thread_id !== threadId) return;
-          utils.threads.reads.invalidate({ threadId });
-        },
-      )
-      .subscribe((status) => {
-        // On a reconnect (not the first SUBSCRIBED), refetch to backfill any
-        // messages that landed while the socket was down. The merge in the
-        // messages.list effect preserves still-pending optimistic sends.
-        if (status === "SUBSCRIBED") {
-          if (hasSubscribedRef.current) {
-            utils.messages.list.invalidate({ threadId });
-            utils.threads.reads.invalidate({ threadId });
-          }
-          hasSubscribedRef.current = true;
-        }
-      });
-    })();
-
-    // Returning to a backgrounded tab can miss realtime events; refetch on
-    // visibility so the thread is never silently stale.
-    const onVisible = () => {
-      if (document.visibilityState === "visible") {
-        utils.messages.list.invalidate({ threadId });
-        utils.threads.reads.invalidate({ threadId });
-      }
-    };
-    document.addEventListener("visibilitychange", onVisible);
-
-    return () => {
-      cancelled = true;
-      document.removeEventListener("visibilitychange", onVisible);
-      hasSubscribedRef.current = false;
-      if (channel) supabase.removeChannel(channel);
-    };
-  }, [threadId, utils.threads.reads]);
 
   useEffect(() => {
     const supabase = createClient();
@@ -2958,139 +2381,6 @@ export function ThreadDetail({
       supabase.removeChannel(channel);
     };
   }, [threadId, groupId, utils]);
-
-  const sendMessage = trpc.messages.send.useMutation({
-    onMutate: (vars) => {
-      haptic("light");
-      playSend();
-      const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-      const clientId = vars.clientId ?? tempId;
-      const messageBody = vars.body ?? "";
-      const replyTo: ReplyTo | null =
-        vars.replyToId
-          ? replyingTo?.id === vars.replyToId
-            ? {
-                id: replyingTo.id,
-                body: replyingTo.body,
-                author_name: replyingTo.authorName,
-                image_url: vars.replyToAttachmentUrl ?? null,
-              }
-            : (() => {
-                const found = messages.find((m) => m.id === vars.replyToId);
-                return found
-                  ? {
-                      id: found.id,
-                      body: found.body.slice(0, 120),
-                      author_name:
-                        found.profiles?.display_name ?? "Unknown",
-                      image_url: vars.replyToAttachmentUrl ?? null,
-                    }
-                  : null;
-              })()
-          : null;
-      const tempMessage: Message = {
-        id: tempId,
-        body: messageBody,
-        created_at: new Date().toISOString(),
-        edited_at: null,
-        is_deleted: false,
-        user_id: myInfo?.id ?? null,
-        thread_id: threadId,
-        client_id: clientId,
-        poll_id: null,
-        poll: null,
-        smeter_id: null,
-        smeter: null,
-        system_event: null,
-        attachments: vars.attachments ?? [],
-        reactions: REACTION_DEFAULTS.map((r) => ({ ...r })),
-        reply_to_id: vars.replyToId ?? null,
-        reply_to: replyTo,
-        profiles: myInfo
-          ? {
-              id: myInfo.id,
-              display_name: myInfo.display_name,
-              avatar_url: myInfo.avatar_url,
-            }
-          : null,
-        delivery_status: "sending",
-      };
-      const failed: FailedEntry = {
-        failId: tempId,
-        clientId,
-        body: messageBody,
-        attachments: vars.attachments ?? [],
-        replyToId: vars.replyToId,
-        replyToAttachmentUrl: vars.replyToAttachmentUrl ?? null,
-        replyTo,
-        created_at: tempMessage.created_at,
-      };
-      setMessages((prev) => [...prev, tempMessage]);
-      return { tempId, failed };
-    },
-    onSuccess: (msg, _vars, ctx) => {
-      const m = msg as unknown as Message;
-      flashMood(m.id, happy, 1200);
-      setMessages((prev) => {
-        if (ctx?.tempId && prev.some((x) => x.id === ctx.tempId)) {
-          if (prev.some((x) => x.id === m.id)) {
-            return prev.filter((x) => x.id !== ctx.tempId);
-          }
-          return prev.map((x) => (x.id === ctx.tempId ? m : x));
-        }
-        if (prev.some((x) => x.id === m.id)) return prev;
-        return [...prev, m];
-      });
-      const up = (msg as unknown as { blobLevelUp?: { level: 2 | 3; shiny: boolean } | null })
-        .blobLevelUp;
-      if (up && myInfo) {
-        void utils.profile.blobs.invalidate();
-        setReveal(evolveSpec(myInfo.id, myBlob, up.level, up.shiny));
-      }
-    },
-    onError: (_err, _vars, ctx) => {
-      if (ctx?.tempId) {
-        setMessages((prev) => prev.filter((m) => m.id !== ctx.tempId));
-      }
-      if (ctx?.failed) {
-        setFailedSends((prev) =>
-          prev.some((f) => f.failId === ctx.failed.failId)
-            ? prev
-            : [...prev, ctx.failed],
-        );
-      }
-    },
-    onSettled: () => {
-      utils.threads.list.invalidate({ groupId });
-    },
-  });
-
-  async function loadEarlier() {
-    if (isLoadingMore || !hasMore || messages.length === 0) return;
-    setIsLoadingMore(true);
-    const container = scrollContainerRef.current;
-    const prevScrollHeight = container?.scrollHeight ?? 0;
-    try {
-      const cursor = messages[0].created_at;
-      const result = await utils.messages.list.fetch({ threadId, cursor });
-      const { messages: older, hasMore: more } = result as unknown as {
-        messages: Message[];
-        hasMore: boolean;
-      };
-      setHasMore(more);
-      for (const m of older) noAnimateIds.current.add(m.id);
-      setMessages((prev) => [...older, ...prev]);
-      requestAnimationFrame(() => {
-        if (container) {
-          container.scrollTop = container.scrollHeight - prevScrollHeight;
-        }
-      });
-    } catch {
-      // silently ignore — user can retry
-    } finally {
-      setIsLoadingMore(false);
-    }
-  }
 
   // Scroll a message into view, paging in older history when it isn't loaded
   // yet — reply quotes and search deep-links often point at old messages.
@@ -3135,26 +2425,15 @@ export function ThreadDetail({
     }
     if (jumpBusyRef.current || messages.length === 0) return;
     jumpBusyRef.current = true;
-    setIsLoadingMore(true);
     try {
-      let more = hasMore;
-      let cursor: string | undefined = messages[0]?.created_at;
       let found = false;
       // Bounded: at most 20 pages (~1000 messages) per jump.
-      for (let i = 0; i < 20 && more && cursor && !found; i++) {
-        const result = (await utils.messages.list.fetch({ threadId, cursor })) as unknown as {
-          messages: Message[];
-          hasMore: boolean;
-        };
-        const older = result.messages;
-        more = result.hasMore;
-        if (older.length === 0) break;
-        cursor = older[0].created_at;
-        found = older.some((m) => m.id === messageId);
-        for (const m of older) noAnimateIds.current.add(m.id);
-        setMessages((prev) => [...older, ...prev]);
+      for (let i = 0; i < 20 && !found; i++) {
+        const res = await thread.loadOlder();
+        const all = flatten(res.data as unknown as Parameters<typeof flatten>[0]);
+        found = all.some((m) => m.id === messageId);
+        if (!res.hasNextPage) break;
       }
-      setHasMore(more);
       if (found) {
         // Two frames: let React commit the prepended rows first.
         requestAnimationFrame(() =>
@@ -3169,89 +2448,7 @@ export function ThreadDetail({
     } catch {
       // network hiccup — user can tap the quote again
     } finally {
-      setIsLoadingMore(false);
       jumpBusyRef.current = false;
-    }
-  }
-
-  // Raw XHR against the storage REST endpoint — supabase-js upload() exposes
-  // no progress events, and a 100 MB video behind a bare spinner feels hung.
-  function xhrUpload(
-    url: string,
-    file: File,
-    headers: Record<string, string>,
-    onProgress: (loadedBytes: number) => void,
-  ): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const xhr = new XMLHttpRequest();
-      xhr.open("POST", url);
-      for (const [k, v] of Object.entries(headers)) xhr.setRequestHeader(k, v);
-      xhr.upload.onprogress = (e) => {
-        if (e.lengthComputable) onProgress(e.loaded);
-      };
-      xhr.onload = () =>
-        xhr.status >= 200 && xhr.status < 300
-          ? resolve()
-          : reject(new Error(`Upload failed (${xhr.status})`));
-      xhr.onerror = () => reject(new Error("Upload failed"));
-      xhr.send(file);
-    });
-  }
-
-  async function uploadFiles(files: File[]): Promise<Attachment[]> {
-    const supabase = createClient();
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-    const user = session?.user;
-    if (!session || !user) throw new Error("Not authenticated");
-
-    // Resize first so progress is measured against the bytes actually sent.
-    const prepared = await Promise.all(
-      files.map(async (raw) => ({ raw, file: await resizeImageIfNeeded(raw) })),
-    );
-    const totalBytes = prepared.reduce((s, p) => s + p.file.size, 0) || 1;
-    const loadedBytes = prepared.map(() => 0);
-    const report = () =>
-      setUploadProgress(
-        Math.min(0.99, loadedBytes.reduce((a, b) => a + b, 0) / totalBytes),
-      );
-    setUploadProgress(0);
-
-    const baseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-    const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-    try {
-      return await Promise.all(
-        prepared.map(async ({ raw, file }, i) => {
-          const ext = file.name.split(".").pop() ?? "bin";
-          const path = `${user.id}/${crypto.randomUUID()}.${ext}`;
-          await xhrUpload(
-            `${baseUrl}/storage/v1/object/attachments/${path}`,
-            file,
-            {
-              authorization: `Bearer ${session.access_token}`,
-              apikey: anonKey,
-              "content-type": file.type || "application/octet-stream",
-              "cache-control": "max-age=3600",
-              "x-upsert": "false",
-            },
-            (loaded) => {
-              loadedBytes[i] = loaded;
-              report();
-            },
-          );
-          const {
-            data: { publicUrl },
-          } = supabase.storage.from("attachments").getPublicUrl(path);
-          return {
-            url: publicUrl,
-            type: attachmentTypeFor(raw),
-            name: raw.name,
-          };
-        }),
-      );
-    } finally {
-      setUploadProgress(null);
     }
   }
 
@@ -3377,48 +2574,41 @@ export function ThreadDetail({
     return `${m}:${(s % 60).toString().padStart(2, "0")}`;
   }
 
-  async function handleSend() {
-    if (
-      (!body.trim() && pendingFiles.length === 0) ||
-      sendMessage.isPending ||
-      uploading
-    )
-      return;
+  function handleSend() {
+    if (!body.trim() && pendingFiles.length === 0) return;
 
     stopTyping();
     // Keep the keyboard up: ignore scroll-up dismiss during the send reflow.
     suppressKbDismissRef.current = Date.now() + 800;
     forceScrollOnNextMessageRef.current = true;
-    scrollToBottom("smooth");
-    setUploading(true);
     setUploadError(null);
+    haptic("light");
+    playSend();
 
-    let attachments: Attachment[] = [];
-    try {
-      if (pendingFiles.length > 0) {
-        attachments = await uploadFiles(pendingFiles);
-      }
-      sendMessage.mutate({
-        threadId,
-        body: body.trim(),
-        attachments,
-        replyToId: replyingTo?.id,
-        replyToAttachmentUrl: replyingTo?.imageUrl ?? undefined,
-        clientId: crypto.randomUUID(),
-      });
-      if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
-      clearDraft(threadId);
-      setBody("");
-      setPendingFiles([]);
-      setReplyingTo(null);
-      setMentionQuery(null);
-      textareaRef.current?.focus();
-    } catch {
-      forceScrollOnNextMessageRef.current = false;
-      setUploadError("Upload failed. Try again.");
-    } finally {
-      setUploading(false);
-    }
+    const key = thread.send({
+      body: body.trim(),
+      files: pendingFiles,
+      replyTo: replyingTo
+        ? {
+            id: replyingTo.id,
+            body: replyingTo.body,
+            author_name: replyingTo.authorName,
+            image_url: replyingTo.imageUrl ?? null,
+          }
+        : null,
+      replyToAttachmentUrl: replyingTo?.imageUrl ?? null,
+    });
+    animateKeys.current.add(key);
+
+    if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
+    clearDraft(threadId);
+    setBody("");
+    setPendingFiles([]);
+    setReplyingTo(null);
+    setMentionQuery(null);
+    textareaRef.current?.focus();
+    // Own send: jump, don't glide.
+    requestAnimationFrame(() => scrollToBottom("auto"));
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -3481,8 +2671,10 @@ export function ThreadDetail({
   }
 
   function handleEditSubmit(messageId: string) {
-    if (!editBody.trim() || editMessage.isPending) return;
-    editMessage.mutate({ messageId, body: editBody.trim() });
+    if (!editBody.trim()) return;
+    thread.editMessage(messageId, editBody.trim());
+    setEditingMessageId(null);
+    setEditBody("");
   }
 
   function clearLongPressTimer() {
@@ -3661,29 +2853,6 @@ export function ThreadDetail({
     setPendingFiles((prev) => prev.filter((_, i) => i !== index));
   }
 
-  function retryFailed(entry: FailedEntry) {
-    forceScrollOnNextMessageRef.current = true;
-    scrollToBottom("smooth");
-    setFailedSends((prev) => prev.filter((f) => f.failId !== entry.failId));
-    sendMessage.mutate({
-      threadId,
-      body: entry.body,
-      attachments: entry.attachments,
-      replyToId: entry.replyToId,
-      replyToAttachmentUrl: entry.replyToAttachmentUrl ?? undefined,
-      // Reuse the original client_id so a retry that the server actually
-      // persisted on the first (timed-out) attempt dedupes instead of doubling.
-      clientId: entry.clientId,
-    });
-  }
-
-  retryFailedRef.current = retryFailed;
-  failedSendsRef.current = failedSends;
-
-  function dismissFailed(failId: string) {
-    setFailedSends((prev) => prev.filter((f) => f.failId !== failId));
-  }
-
   async function copyMessage(messageId: string, text: string) {
     if (!text.trim()) return;
     try {
@@ -3732,46 +2901,8 @@ export function ThreadDetail({
     if (valid.length > 0) setPendingFiles((prev) => [...prev, ...valid]);
   }
 
-  const failedMessages = useMemo<Message[]>(
-    () =>
-      failedSends.map((entry) => ({
-        id: `failed-${entry.failId}`,
-        body: entry.body,
-        created_at: entry.created_at,
-        edited_at: null,
-        is_deleted: false,
-        user_id: myInfo?.id ?? null,
-        thread_id: threadId,
-        poll_id: null,
-        poll: null,
-        smeter_id: null,
-        smeter: null,
-        system_event: null,
-        attachments: entry.attachments,
-        reactions: REACTION_DEFAULTS.map((r) => ({ ...r })),
-        reply_to_id: entry.replyToId ?? null,
-        reply_to: entry.replyTo,
-        profiles: myInfo
-          ? {
-              id: myInfo.id,
-              display_name: myInfo.display_name,
-              avatar_url: myInfo.avatar_url,
-            }
-          : { id: "me", display_name: "You", avatar_url: null },
-        delivery_status: "failed",
-        fail_id: entry.failId,
-      })),
-    [failedSends, myInfo, threadId],
-  );
-
-  const displayMessages = useMemo(
-    () =>
-      [...messages, ...failedMessages].sort(
-        (a, b) =>
-          new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
-      ),
-    [messages, failedMessages],
-  );
+  // Server rows + pending sends, already ordered (pending last).
+  const displayMessages = messages;
 
   const activeMessageMenu = useMemo(
     () =>
@@ -3834,11 +2965,7 @@ export function ThreadDetail({
   }, [displayMessages]);
 
   const isDone = threadStatus === "DONE";
-  const canSend =
-    !isDone &&
-    (body.trim() || pendingFiles.length > 0) &&
-    !sendMessage.isPending &&
-    !uploading;
+  const canSend = !isDone && (body.trim().length > 0 || pendingFiles.length > 0);
 
   const members = workspaceMembers ?? [];
   // Past this size, enable content-visibility windowing on message rows.
@@ -3934,7 +3061,7 @@ export function ThreadDetail({
         // band / shift the whole window sideways on a message swipe.
         style={{ touchAction: "pan-y" }}
       >
-        {loadedMessages === undefined && messages.length === 0 ? (
+        {thread.isLoading && messages.length === 0 ? (
           <div className="flex flex-col justify-end min-h-full space-y-4">
             {[0, 1, 2, 3, 4, 5].map((i) => (
               <div key={i} className="flex gap-3">
@@ -3956,15 +3083,18 @@ export function ThreadDetail({
             </div>
           ) : (
           <>
-            {hasMore && (
-              <div className="flex justify-center mb-4">
-                <button
-                  onClick={loadEarlier}
-                  disabled={isLoadingMore}
-                  className="font-mono text-[11px] text-muted hover:text-ink uppercase tracking-wider px-3 py-1.5 border border-border hover:border-ink/30 transition-colors disabled:opacity-40"
-                >
-                  {isLoadingMore ? "loading…" : "↑ load earlier messages"}
-                </button>
+            {thread.hasMore && (
+              <div ref={olderSentinelRef} className="flex justify-center mb-4 min-h-[20px]">
+                {thread.olderError ? (
+                  <button
+                    onClick={() => void thread.loadOlder()}
+                    className="font-mono text-[11px] text-muted hover:text-ink"
+                  >
+                    couldn&apos;t load older messages — tap to retry
+                  </button>
+                ) : thread.isLoadingOlder ? (
+                  <span className="font-mono text-[11px] text-muted">loading…</span>
+                ) : null}
               </div>
             )}
             {messagesByDate.map(({ date, messages: dayMessages }) => {
@@ -3998,14 +3128,12 @@ export function ThreadDetail({
                           : blobMoods[msg.id];
                     const isEditing = editingMessageId === msg.id;
                     const isLocalMessage = !!msg.delivery_status;
-                    const failedEntry = msg.fail_id
-                      ? failedSends.find((f) => f.failId === msg.fail_id)
-                      : undefined;
+                    const canRetry = !msg.missing_files?.length;
                     const seenReaders = seenByMessage[msg.id] ?? [];
 
                     return (
                       <div
-                        key={msg.id}
+                        key={msg.client_id ?? msg.id}
                         id={`message-${msg.id}`}
                         className="relative flex gap-3 group rounded-sm px-2 -mx-2 select-none md:select-text"
                         style={{
@@ -4021,7 +3149,7 @@ export function ThreadDetail({
                             activeMessageMenuId === msg.id ? "none" : undefined,
                           animation: (() => {
                             const parts: string[] = [];
-                            if (!noAnimateIds.current.has(msg.id)) {
+                            if (animateKeys.current.has(msg.client_id ?? msg.id)) {
                               parts.push("fadeUp 360ms ease-out both");
                             }
                             if (msg.id === highlightMessageId || msg.id === jumpFlashId) {
@@ -4106,7 +3234,7 @@ export function ThreadDetail({
                             </div>
                           )}
 
-                          <div className="relative">
+                          <div className={`relative ${msg.delivery_status === "sending" && msg.upload_progress !== undefined ? "opacity-70" : ""}`}>
                             {/* Reply quote */}
                             {msg.reply_to && !msg.is_deleted && (
                               <div className="flex items-center gap-1.5 mb-1 border-l-2 border-border pl-2 hover:border-ink/40 transition-colors group/reply">
@@ -4179,11 +3307,11 @@ export function ThreadDetail({
                                   <button
                                     onClick={() => handleEditSubmit(msg.id)}
                                     disabled={
-                                      editMessage.isPending || !editBody.trim()
+                                      !editBody.trim()
                                     }
                                     className="font-mono text-[10px] uppercase tracking-wider bg-ink text-surface px-2.5 py-1 hover:bg-ink/90 disabled:opacity-40 transition-colors"
                                   >
-                                    {editMessage.isPending ? "…" : "save"}
+                                    save
                                   </button>
                                   <button
                                     onClick={() => {
@@ -4204,7 +3332,6 @@ export function ThreadDetail({
                                 {msg.poll && (
                                   <PollView
                                     poll={msg.poll}
-                                    threadId={threadId}
                                     myInfo={myInfo}
                                   />
                                 )}
@@ -4289,11 +3416,7 @@ export function ThreadDetail({
                                       ✎
                                     </button>
                                     <button
-                                      onClick={() =>
-                                        deleteMessage.mutate({
-                                          messageId: msg.id,
-                                        })
-                                      }
+                                      onClick={() => thread.deleteMessage(msg.id)}
                                       title="Delete"
                                       className="px-1.5 py-0.5 text-[13px] text-muted hover:text-red-500 hover:scale-110 transition-all border-none bg-transparent cursor-pointer leading-none"
                                     >
@@ -4306,12 +3429,7 @@ export function ThreadDetail({
                                 {REACTION_TYPES.map((emoji) => (
                                   <button
                                     key={emoji}
-                                    onClick={() =>
-                                      toggleReaction.mutate({
-                                        messageId: msg.id,
-                                        type: emoji,
-                                      })
-                                    }
+                                    onClick={() => thread.toggleReaction(msg.id, emoji)}
                                     className="px-1.5 py-0.5 text-sm hover:scale-125 transition-transform border-none bg-transparent cursor-pointer"
                                   >
                                     {emoji}
@@ -4400,7 +3518,7 @@ export function ThreadDetail({
                                         <video
                                           key={i}
                                           controls
-                                          src={att.url}
+                                          src={localPreview(att.url) ?? att.url}
                                           className="max-w-xs border border-border"
                                           style={{ maxHeight: 320 }}
                                         />
@@ -4474,10 +3592,7 @@ export function ThreadDetail({
                                                 null;
                                               return;
                                             }
-                                            toggleReaction.mutate({
-                                              messageId: msg.id,
-                                              type: r.type as ReactionType,
-                                            });
+                                            thread.toggleReaction(msg.id, r.type);
                                           }}
                                           onMouseEnter={() =>
                                             setActiveTooltip(tooltipKey)
@@ -4544,23 +3659,40 @@ export function ThreadDetail({
                               </div>
                             )}
 
+                          {msg.upload_progress !== undefined && (
+                            <div className="mt-1 h-0.5 w-full max-w-[272px] bg-border overflow-hidden">
+                              <div
+                                className="h-full bg-ink transition-[width] duration-150 ease-out"
+                                style={{ width: `${Math.round(msg.upload_progress * 100)}%` }}
+                              />
+                            </div>
+                          )}
                           {msg.delivery_status === "sending" && (
-                            <p className="font-mono text-[10px] text-muted-2 mt-1">
-                              sending...
-                            </p>
+                            <span
+                              aria-label="sending"
+                              className="absolute -right-1 bottom-0 font-mono text-[10px] text-muted-2 leading-none"
+                            >
+                              🕓
+                            </span>
+                          )}
+                          {thread.rowErrors[msg.id] && (
+                            <p className="font-mono text-[10px] text-red-600 mt-1">{thread.rowErrors[msg.id]}</p>
                           )}
 
                           {msg.delivery_status === "failed" && (
                             <div className="flex items-center gap-2 mt-1">
+                              {canRetry ? (
+                                <button
+                                  onClick={() => msg.fail_id && thread.retry(msg.fail_id)}
+                                  className="font-mono text-[10px] text-red-600 hover:text-red-700"
+                                >
+                                  failed - retry
+                                </button>
+                              ) : (
+                                <span className="font-mono text-[10px] text-red-600">attachment lost</span>
+                              )}
                               <button
-                                onClick={() => failedEntry && retryFailed(failedEntry)}
-                                disabled={!failedEntry}
-                                className="font-mono text-[10px] text-red-600 hover:text-red-700 disabled:opacity-40"
-                              >
-                                failed - retry
-                              </button>
-                              <button
-                                onClick={() => msg.fail_id && dismissFailed(msg.fail_id)}
+                                onClick={() => msg.fail_id && thread.discard(msg.fail_id)}
                                 className="font-mono text-[13px] leading-none text-muted hover:text-ink"
                               >
                                 x
@@ -4766,12 +3898,7 @@ export function ThreadDetail({
                   type="button"
                   onClick={() => {
                     setActiveMessageMenuId(null);
-                    toggleReaction.mutate({
-                      messageId: activeMessageMenu.id,
-                      type: reaction.type as Parameters<
-                        typeof toggleReaction.mutate
-                      >[0]["type"],
-                    });
+                    thread.toggleReaction(activeMessageMenu.id, reaction.type);
                   }}
                   className="flex h-12 items-center justify-center border border-border bg-surface-2 text-xl transition-colors active:bg-pastel-tint"
                   aria-label={`React with ${reaction.type}`}
@@ -4830,7 +3957,7 @@ export function ThreadDetail({
                   type="button"
                   onClick={() => {
                     setActiveMessageMenuId(null);
-                    deleteMessage.mutate({ messageId: activeMessageMenu.id });
+                    thread.deleteMessage(activeMessageMenu.id);
                   }}
                   className="flex h-11 flex-1 items-center justify-center border border-red-200 bg-red-50 px-3 font-mono text-[11px] uppercase tracking-[0.1em] text-red-700 transition-colors active:bg-red-100"
                 >
@@ -4912,10 +4039,10 @@ export function ThreadDetail({
             </button>
           </div>
         )}
-        {!isDone && (sendMessage.error || uploadError) && (
+        {!isDone && uploadError && (
           <div className="flex items-start justify-between gap-3 mb-2 px-3 py-2 border border-red-200 bg-red-50">
             <p className="font-mono text-[11px] text-red-700 whitespace-pre-wrap leading-snug">
-              {uploadError ?? sendMessage.error?.message}
+              {uploadError}
             </p>
             <button
               onClick={() => setUploadError(null)}
@@ -4964,21 +4091,6 @@ export function ThreadDetail({
                 onRemove={() => removePendingFile(i)}
               />
             ))}
-          </div>
-        )}
-
-        {/* Upload progress */}
-        {!isDone && uploadProgress !== null && (
-          <div className="mb-2 flex items-center gap-2">
-            <div className="flex-1 h-1 bg-border overflow-hidden">
-              <div
-                className="h-full bg-ink transition-[width] duration-150 ease-out"
-                style={{ width: `${Math.round(uploadProgress * 100)}%` }}
-              />
-            </div>
-            <span className="font-mono text-[10px] text-muted tabular-nums w-9 text-right">
-              {Math.round(uploadProgress * 100)}%
-            </span>
           </div>
         )}
 
@@ -5115,13 +4227,7 @@ export function ThreadDetail({
                   : "bg-border text-muted-2 cursor-not-allowed"
               }`}
             >
-              {uploading
-                ? uploadProgress !== null
-                  ? `${Math.round(uploadProgress * 100)}%`
-                  : "↑"
-                : sendMessage.isPending
-                  ? "…"
-                  : "send"}
+              send
             </button>
           </div>
         )}
