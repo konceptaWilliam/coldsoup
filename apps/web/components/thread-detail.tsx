@@ -9,7 +9,8 @@ import { createGazeField, type GazeField } from "@/lib/gaze-field";
 // useLayoutEffect on the client (positions scroll before paint), useEffect on
 // the server to avoid the SSR warning.
 const useIsoLayoutEffect = typeof window !== "undefined" ? useLayoutEffect : useEffect;
-import { useRouter } from "next/navigation";
+import { navigateBack } from "@/lib/shell-route";
+import { SWIPE_EDGE_PX } from "@/lib/swipe";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import { trpc } from "@/lib/trpc/client";
 import { createClient, setRealtimeAuth, getPresenceClient } from "@/lib/supabase/client";
@@ -1515,7 +1516,6 @@ function ThreadDetailsPanel({
   groupId: string;
   onClose: () => void;
 }) {
-  const router = useRouter();
   const utils = trpc.useUtils();
   const { data: meta, isLoading } = trpc.threads.get.useQuery({ threadId });
   const { data: notifPrefs } = trpc.notifications.prefs.useQuery();
@@ -1587,7 +1587,7 @@ function ThreadDetailsPanel({
     onSuccess: () => {
       utils.threads.list.invalidate({ groupId });
       onClose();
-      router.push(`/g/${groupId}`);
+      navigateBack(`/g/${groupId}`);
     },
     onError: (err) => setError(err.message),
   });
@@ -1902,17 +1902,29 @@ export function ThreadDetail({
   initialTitle,
   initialStatus,
   highlightMessageId,
+  me,
 }: {
   threadId: string;
   groupId: string;
   initialTitle: string;
   initialStatus: ThreadStatus;
   highlightMessageId?: string;
+  me: { id: string; display_name: string; avatar_url: string | null };
 }) {
-  const [messages, setMessages] = useState<Message[]>([]);
   // Message ids present at load time — these render instantly (no fade). Only
   // messages that arrive later (realtime / sent) animate in.
   const noAnimateIds = useRef<Set<string>>(new Set());
+  // First paint comes straight from the React Query cache (warmed by
+  // prefetch / persistence), so a cached thread never flashes empty.
+  const cacheUtils = trpc.useUtils();
+  const cachedPage = cacheUtils.messages.list.getData({ threadId }) as unknown as
+    | { messages: Message[]; hasMore: boolean }
+    | undefined;
+  const [messages, setMessages] = useState<Message[]>(() => {
+    const msgs = cachedPage?.messages ?? [];
+    for (const m of msgs) noAnimateIds.current.add(m.id);
+    return msgs;
+  });
   const [body, setBody] = useState("");
   // True while the soft keyboard is up — used to drop the composer's safe-area
   // bottom padding (otherwise it leaves a gap between the input and keyboard).
@@ -1933,15 +1945,21 @@ export function ThreadDetail({
     }, ms);
   }, []);
   const [composerFocused, setComposerFocused] = useState(false);
-  const [myInfo, setMyInfo] = useState<{
-    id: string;
-    display_name: string;
-    avatar_url: string | null;
-  } | null>(null);
+  // Provided by the shell (server-fetched once per app load) — no auth or
+  // profile round trip before realtime channels and own-message UI work.
+  const myInfo = me;
   const presenceChannelRef = useRef<RealtimeChannel | null>(null);
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [threadStatus, setThreadStatus] = useState<ThreadStatus>(initialStatus);
   const [threadTitle, setThreadTitle] = useState(initialTitle);
+  // Header starts from the thread-list cache (instant); threads.get refines it
+  // (and covers cold deep links where the list isn't cached).
+  const { data: threadMeta } = trpc.threads.get.useQuery({ threadId });
+  useEffect(() => {
+    if (!threadMeta) return;
+    setThreadTitle(threadMeta.title as string);
+    setThreadStatus(threadMeta.status as ThreadStatus);
+  }, [threadMeta?.title, threadMeta?.status]); // eslint-disable-line react-hooks/exhaustive-deps
   const [showDetails, setShowDetails] = useState(false);
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [isRecording, setIsRecording] = useState(false);
@@ -1972,7 +1990,7 @@ export function ThreadDetail({
   const [profileTarget, setProfileTarget] = useState<ProfileTarget | null>(null);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [activeMessageMenuId, setActiveMessageMenuId] = useState<string | null>(null);
-  const [hasMore, setHasMore] = useState(false);
+  const [hasMore, setHasMore] = useState(() => cachedPage?.hasMore ?? false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   // Flash highlight for jump-to-message (reply quotes, search deep-links).
   const [jumpFlashId, setJumpFlashId] = useState<string | null>(null);
@@ -2034,7 +2052,6 @@ export function ThreadDetail({
   const composerRef = useRef<HTMLDivElement>(null);
   const composerTouchYRef = useRef<number | null>(null);
   const utils = trpc.useUtils();
-  const router = useRouter();
   const { markRead } = useUnread();
   const [reveal, setReveal] = useState<RevealSpec | null>(null);
   const myBlob = useBlob(myInfo?.id);
@@ -2059,7 +2076,8 @@ export function ThreadDetail({
   const [mentionIndex, setMentionIndex] = useState(0);
 
   const markReadServer = trpc.threads.markRead.useMutation({
-    onSuccess: () => {
+    onSuccess: (res) => {
+      if (!res.changed) return;
       utils.groups.unread.invalidate();
       utils.threads.unreadCounts.invalidate({ groupId });
     },
@@ -2128,18 +2146,33 @@ export function ThreadDetail({
     markRead(threadId, groupId);
   }, [threadId, groupId, markRead]);
 
-  // Read receipts — mark on open and whenever new messages arrive while the
-  // thread is open. Advances BOTH the client lastSeen marker (so the
-  // thread-list unread dot clears for messages seen while viewing, including
-  // your own just-sent message) and the server-side receipt (so others see
-  // "seen").
-  useEffect(() => {
-    if (messages.length > 0) {
-      markRead(threadId, groupId);
-      markReadServer.mutate({ threadId });
+  // Read receipts — mark on open and whenever a new *server* message arrives
+  // while the thread is open (optimistic temp rows don't count). Advances BOTH
+  // the client lastSeen marker (so the thread-list unread dot clears for
+  // messages seen while viewing, including your own just-sent message) and the
+  // server-side receipt (so others see "seen"). The server receipt is debounced
+  // 1s and flushed on unmount so leaving quickly still records the read.
+  const newestServerMessageId = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (!m.delivery_status && !m.id.startsWith("temp-")) return m.id;
     }
+    return null;
+  }, [messages]);
+  const flushReadRef = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    if (!newestServerMessageId) return;
+    markRead(threadId, groupId);
+    const fire = () => {
+      flushReadRef.current = null;
+      markReadServer.mutate({ threadId });
+    };
+    flushReadRef.current = fire;
+    const t = setTimeout(fire, 1000);
+    return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [threadId, groupId, messages.length]);
+  }, [threadId, groupId, newestServerMessageId]);
+  useEffect(() => () => flushReadRef.current?.(), []);
 
   useEffect(() => {
     isInitialLoad.current = true;
@@ -2381,7 +2414,7 @@ export function ThreadDetail({
     return [...specials, ...matched];
   }, [mentionQuery, workspaceMembers]);
 
-  const { data: loadedMessages, isLoading } = trpc.messages.list.useQuery(
+  const { data: loadedMessages } = trpc.messages.list.useQuery(
     { threadId },
     { refetchOnWindowFocus: false },
   );
@@ -2557,23 +2590,6 @@ export function ThreadDetail({
     };
   }, [threadId, myId, flashMood, utils.messages.list]);
 
-  useEffect(() => {
-    const supabase = createClient();
-    supabase.auth.getUser().then(async ({ data: { user } }) => {
-      if (!user) return;
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("display_name, avatar_url")
-        .eq("id", user.id)
-        .single();
-      if (profile)
-        setMyInfo({
-          id: user.id,
-          display_name: profile.display_name,
-          avatar_url: profile.avatar_url ?? null,
-        });
-    });
-  }, []);
 
   useEffect(() => {
     if (!myInfo) return;
@@ -3518,6 +3534,8 @@ export function ThreadDetail({
     if (message.is_deleted || message.delivery_status) return;
     const t = e.touches[0];
     if (!t) return;
+    // Left-edge starts belong to the swipe-back gesture (shell-stack).
+    if (t.clientX < SWIPE_EDGE_PX) return;
     swipeRef.current = {
       id: message.id,
       x: t.clientX,
@@ -3836,7 +3854,7 @@ export function ThreadDetail({
       <header className="border-b border-border flex-shrink-0">
         <div className="px-3 md:px-6 flex items-center gap-2 md:gap-4 h-12 md:h-auto md:py-[14px]">
           <button
-            onClick={() => router.push(`/g/${groupId}`)}
+            onClick={() => navigateBack(`/g/${groupId}`)}
             className="md:hidden w-11 h-full flex items-center justify-center -ml-1 flex-shrink-0 text-muted hover:text-ink transition-colors"
             aria-label="Back to threads"
           >
@@ -3916,7 +3934,7 @@ export function ThreadDetail({
         // band / shift the whole window sideways on a message swipe.
         style={{ touchAction: "pan-y" }}
       >
-        {isLoading ? (
+        {loadedMessages === undefined && messages.length === 0 ? (
           <div className="flex flex-col justify-end min-h-full space-y-4">
             {[0, 1, 2, 3, 4, 5].map((i) => (
               <div key={i} className="flex gap-3">
