@@ -1,28 +1,5 @@
-import { createClient } from "@/lib/supabase/server";
-import { ThreadList } from "@/components/thread-list";
-
-export default async function GroupPage({
-  params,
-}: {
-  params: Promise<{ groupId: string }>;
-}) {
-  const { groupId } = await params;
-  const supabase = await createClient();
-  const { data: group } = await supabase
-    .from("groups")
-    .select("name")
-    .eq("id", groupId)
-    .single();
-
-  return (
-    <>
-      <ThreadList groupId={groupId} groupName={group?.name ?? groupId} />
-      {/* Empty state for thread detail panel — hidden on mobile (thread list takes full width) */}
-      <div className="hidden md:flex flex-1 items-center justify-center">
-        <p className="font-mono text-sm text-muted">
-          Select a thread to read it
-        </p>
-      </div>
-    </>
-  );
+// Content is rendered by the persistent shell in app/g/layout.tsx; this route
+// exists so /g/:groupId deep links and reloads match.
+export default function GroupPage() {
+  return null;
 }
