@@ -1,16 +1,20 @@
 "use client";
 
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import dynamic from "next/dynamic";
 import { navigate } from "@/lib/shell-route";
 import { useShellRoute } from "@/lib/use-shell-route";
 import { trpc } from "@/lib/trpc/client";
 import { createClient } from "@/lib/supabase/client";
 import { StatusBadge } from "./status-badge";
 import { Avatar } from "./avatar";
-import { NewThreadDialog } from "./new-thread-dialog";
-import { GroupCalendar } from "./group-calendar";
 import { useUnread, getLastSeen, setLastSeen } from "@/lib/unread-context";
 import { useMobileSidebar } from "@/lib/mobile-sidebar-context";
+
+// Loaded on first open — keeps these (and the calendar event dialog) out of
+// the first-load bundle.
+const NewThreadDialog = dynamic(() => import("./new-thread-dialog").then((m) => m.NewThreadDialog), { ssr: false });
+const GroupCalendar = dynamic(() => import("./group-calendar").then((m) => m.GroupCalendar), { ssr: false });
 
 type Thread = {
   id: string;
