@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { useShellNavigate } from "@/lib/use-shell-route";
 import { trpc } from "@/lib/trpc/client";
 import { InstallPrompt } from "./install-prompt";
+import { installChunkReload } from "@/lib/chunk-reload";
 
 function urlBase64ToUint8Array(base64String: string) {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
@@ -30,11 +31,17 @@ export function PwaManager() {
     return () => navigator.serviceWorker.removeEventListener("message", onMessage);
   }, [go]);
   useEffect(() => {
+    installChunkReload();
+  }, []);
+
+  useEffect(() => {
     if (typeof window === "undefined") return;
     if (!("serviceWorker" in navigator)) return;
 
     const register = () => {
-      navigator.serviceWorker.register("/sw.js").catch((err) => {
+      // updateViaCache "none": always revalidate sw.js and its importScripts
+      // (sw-routes.js) so a fix ships on the next open, not after HTTP caching.
+      navigator.serviceWorker.register("/sw.js", { updateViaCache: "none" }).catch((err) => {
         console.error("SW registration failed", err);
       });
     };

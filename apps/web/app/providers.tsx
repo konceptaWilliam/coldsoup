@@ -96,6 +96,10 @@ export function Providers({ children }: { children: React.ReactNode }) {
       if (event === "SIGNED_OUT") {
         queryClient.clear();
         persister.removeClient();
+        // Cached page HTML carries this user's server-rendered shell.
+        try {
+          navigator.serviceWorker?.controller?.postMessage({ type: "clear-shell" });
+        } catch {}
       }
     });
     return () => subscription.unsubscribe();
