@@ -1,6 +1,16 @@
-// Coldsoup service worker — push notifications + media cache.
+// Coldsoup service worker — app shell, static assets, media cache, push.
+
+importScripts("/sw-routes.js");
 
 const MEDIA_CACHE = "coldsoup-media-v1";
+const STATIC_CACHE = "coldsoup-static-v1";
+const SHELL_CACHE = "coldsoup-shell-v1";
+const CURRENT_CACHES = [MEDIA_CACHE, STATIC_CACHE, SHELL_CACHE];
+const STATIC_MAX_ENTRIES = 400;
+// Special key in SHELL_CACHE whose body is the URL of the last shell page.
+const LAST_SHELL_KEY = "/__last-shell";
+// next dev serves mutable /_next/static and pages — never cache them there.
+const IS_DEV = self.location.hostname === "localhost" || self.location.hostname === "127.0.0.1";
 
 function urlBase64ToUint8Array(base64String) {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
@@ -18,24 +28,35 @@ self.addEventListener("install", () => {
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     (async () => {
-      // Drop old media cache versions.
+      // Drop caches from older versions (and the shell cache if a future
+      // version stops using it).
       const keys = await caches.keys();
       await Promise.all(
-        keys.filter((k) => k.startsWith("coldsoup-media-") && k !== MEDIA_CACHE).map((k) => caches.delete(k))
+        keys
+          .filter((k) => k.startsWith("coldsoup-") && CURRENT_CACHES.indexOf(k) === -1)
+          .map((k) => caches.delete(k))
       );
       await self.clients.claim();
     })()
   );
 });
 
+// Logout: the next user on this device must never see this user's shell.
+self.addEventListener("message", (event) => {
+  if (event.data && event.data.type === "clear-shell") {
+    event.waitUntil(caches.delete(SHELL_CACHE));
+  }
+});
+
+async function trimCache(cache, max) {
+  const keys = await cache.keys();
+  for (let i = 0; i < keys.length - max; i++) await cache.delete(keys[i]);
+}
+
 // Cache-first for public storage objects (attachments/avatars). Files are
 // immutable (uuid names; avatars are cache-busted with ?t=), so a repeat view
 // is served from the device — no Supabase egress.
-self.addEventListener("fetch", (event) => {
-  if (event.request.method !== "GET") return;
-  const url = new URL(event.request.url);
-  if (!url.pathname.includes("/storage/v1/object/public/")) return;
-
+function handleMedia(event) {
   event.respondWith(
     (async () => {
       const cache = await caches.open(MEDIA_CACHE);
@@ -50,6 +71,97 @@ self.addEventListener("fetch", (event) => {
       }
     })()
   );
+}
+
+// Cache-first for hashed build assets and icons (immutable per URL).
+function handleStatic(event) {
+  event.respondWith(
+    (async () => {
+      const cache = await caches.open(STATIC_CACHE);
+      const cached = await cache.match(event.request);
+      if (cached) return cached;
+      const res = await fetch(event.request);
+      if (res.ok) {
+        await cache.put(event.request, res.clone());
+        trimCache(cache, STATIC_MAX_ENTRIES).catch(() => {});
+      }
+      return res;
+    })()
+  );
+}
+
+// Stale-while-revalidate for /g/** pages: answer instantly from the device,
+// refresh the copy in the background for next time.
+function handleShell(event, url) {
+  const key = self.swRoutes.shellKey(url);
+  // One network request serves both the response (on a miss) and the cache.
+  const network = fetch(event.request).then((res) => ({ res, copy: res.clone() }));
+
+  event.waitUntil(
+    (async () => {
+      const cache = await caches.open(SHELL_CACHE);
+      try {
+        const { copy } = await network;
+        if (copy.type === "opaqueredirect") {
+          // Session gone (e.g. redirected to /login): stop serving this page.
+          await cache.delete(key);
+          return;
+        }
+        const cacheable = self.swRoutes.isCacheableShell({
+          ok: copy.ok,
+          type: copy.type,
+          contentType: copy.headers.get("content-type") || "",
+        });
+        if (cacheable) {
+          await cache.put(key, copy);
+          await cache.put(LAST_SHELL_KEY, new Response(key));
+        }
+      } catch (e) {
+        // Offline — keep the cached copy.
+      }
+    })()
+  );
+
+  event.respondWith(
+    (async () => {
+      const cache = await caches.open(SHELL_CACHE);
+      const cached = await cache.match(key);
+      if (cached) return cached;
+      try {
+        const { res } = await network;
+        return res;
+      } catch (e) {
+        return Response.error();
+      }
+    })()
+  );
+}
+
+// start_url "/" is a server redirect; jump straight to the last shell page
+// when it's cached so a cold launch never waits for the server.
+function handleRoot(event) {
+  event.respondWith(
+    (async () => {
+      const cache = await caches.open(SHELL_CACHE);
+      const last = await cache.match(LAST_SHELL_KEY);
+      if (last) {
+        const target = await last.text();
+        if (target && (await cache.match(target))) return Response.redirect(target, 302);
+      }
+      return fetch(event.request);
+    })()
+  );
+}
+
+self.addEventListener("fetch", (event) => {
+  if (event.request.method !== "GET") return;
+  const url = new URL(event.request.url);
+  const kind = self.swRoutes.classify(url, event.request.mode, self.location.origin);
+  if (kind === "media") return handleMedia(event);
+  if (IS_DEV) return;
+  if (kind === "static") return handleStatic(event);
+  if (kind === "shell") return handleShell(event, url);
+  if (kind === "root") return handleRoot(event);
 });
 
 self.addEventListener("push", (event) => {
