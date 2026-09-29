@@ -375,7 +375,7 @@ export function ThreadList({ groupId, groupName }: { groupId: string; groupName:
     (threadId: string) => {
       if (prefetchedRef.current.has(threadId)) return;
       prefetchedRef.current.add(threadId);
-      void utils.messages.list.prefetch({ threadId });
+      void utils.messages.list.prefetchInfinite({ threadId });
     },
     [utils],
   );

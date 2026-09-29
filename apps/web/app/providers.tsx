@@ -9,7 +9,8 @@ import { getQueryKey } from "@trpc/react-query";
 import superjson from "superjson";
 
 // Bump to invalidate all persisted caches (e.g. after a data-shape change).
-const CACHE_BUSTER = "1";
+// "2": messages.list became an infinite query (old persisted shape dropped).
+const CACHE_BUSTER = "2";
 const WEEK = 1000 * 60 * 60 * 24 * 7;
 import { trpc } from "@/lib/trpc/client";
 import { createClient, setRealtimeAuth } from "@/lib/supabase/client";
@@ -17,6 +18,7 @@ import { diagnosticFetch } from "@/lib/response-diagnostics";
 import { PresenceProvider } from "@/lib/presence-context";
 import { ThemeProvider } from "@/lib/theme-context";
 import { PwaManager } from "@/components/pwa-manager";
+import { trimPersistedMessages } from "@/lib/thread-cache";
 
 function getBaseUrl() {
   if (typeof window !== "undefined") return "";
@@ -74,6 +76,12 @@ export function Providers({ children }: { children: React.ReactNode }) {
     createSyncStoragePersister({
       storage: typeof window !== "undefined" ? window.localStorage : undefined,
       key: "coldsoup-query-cache",
+      // Only the newest page of each thread is persisted; older pages scrolled
+      // into view stay in memory for the session.
+      serialize: (client) =>
+        JSON.stringify(
+          trimPersistedMessages(client as unknown as Parameters<typeof trimPersistedMessages>[0]),
+        ),
       // If localStorage fills up, drop the oldest queries instead of failing.
       retry: removeOldestQuery,
     })
