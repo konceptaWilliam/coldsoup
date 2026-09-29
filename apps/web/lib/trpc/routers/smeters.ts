@@ -4,6 +4,9 @@ import { router, protectedProcedure } from "../trpc";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { buildStats } from "@/lib/smeter-insights";
 import { postSystemMessage } from "@/lib/system-messages";
+import { assertThreadAccess } from "../thread-access";
+import { accessibleByGroup } from "@/lib/server-shapes";
+import { waitUntil } from "@/lib/wait-until";
 
 // ISO date (YYYY-MM-DD), as the standalone planner stores custom dates.
 const ISO_DATE = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Invalid date");
@@ -35,6 +38,15 @@ type SMeterSummary = {
 };
 
 type AdminClient = ReturnType<typeof createAdminClient>;
+
+// smeter → thread → membership in one RPC. Returns the group id, or throws NOT_FOUND.
+async function assertSmeterAccess(admin: AdminClient, smeterId: string, userId: string): Promise<string> {
+  const { data, error } = await admin.rpc("smeter_access", { p_smeter: smeterId, p_user: userId });
+  if (error) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: error.message });
+  const row = (data as { group_id: string }[] | null)?.[0];
+  if (!row) throw new TRPCError({ code: "NOT_FOUND" });
+  return row.group_id;
+}
 
 // Push to a set of users (Expo + Web Push), skipping muted/paused recipients.
 // Shared by S-meter create and completion. Best-effort — callers wrap in try.
@@ -113,45 +125,44 @@ export const smetersRouter = router({
       const admin = createAdminClient();
       if (input.smeterIds.length === 0) return {};
 
-      const { data: smeterRows } = await admin
-        .from("smeters")
-        .select("id, thread_id, mode, custom_dates, custom_labels, title, participant_ids")
-        .in("id", input.smeterIds);
-      if (!smeterRows || smeterRows.length === 0) return {};
-
-      // Membership check — only summarise S-meters in the caller's groups.
-      const threadIds = Array.from(new Set(smeterRows.map((s) => s.thread_id as string)));
-      const { data: threads } = await admin.from("threads").select("id, group_id").in("id", threadIds);
-      const threadGroup = new Map((threads ?? []).map((t) => [t.id as string, t.group_id as string]));
-      const groupIds = Array.from(new Set((threads ?? []).map((t) => t.group_id as string)));
-      const { data: memberships } = await admin
-        .from("group_memberships")
-        .select("group_id")
-        .eq("user_id", profile.id)
-        .in("group_id", groupIds);
-      const memberGroupIds = new Set((memberships ?? []).map((m) => m.group_id as string));
-
-      const allowed = smeterRows.filter((s) => memberGroupIds.has(threadGroup.get(s.thread_id as string) ?? ""));
-      if (allowed.length === 0) return {};
-      const allowedIds = allowed.map((s) => s.id as string);
-
-      // Group members (to expand null participant_ids = "all members") + responses.
-      const [{ data: memberRows }, { data: responseRows }] = await Promise.all([
-        admin.from("group_memberships").select("group_id, user_id").in("group_id", groupIds),
-        admin.from("smeter_responses").select("smeter_id, user_id").in("smeter_id", allowedIds),
+      const [{ data: smeterRows }, { data: responseRows }, { data: memberships }] = await Promise.all([
+        admin
+          .from("smeters")
+          .select("id, thread_id, mode, custom_dates, custom_labels, title, participant_ids, threads!inner(group_id)")
+          .in("id", input.smeterIds),
+        admin.from("smeter_responses").select("smeter_id, user_id").in("smeter_id", input.smeterIds),
+        admin.from("group_memberships").select("group_id").eq("user_id", profile.id),
       ]);
+
+      const groupOf = (s: { threads: unknown }) =>
+        (s.threads as unknown as { group_id: string } | null)?.group_id;
+      const myGroups = new Set((memberships ?? []).map((m) => m.group_id as string));
+      const allowed = accessibleByGroup(smeterRows ?? [], groupOf, myGroups);
+      if (allowed.length === 0) return {};
+
+      // Only legacy S-meters (participant_ids null = everyone) need the group's
+      // member list; create always stores an explicit set.
+      const legacyGroups = Array.from(
+        new Set(allowed.filter((s) => !s.participant_ids).map((s) => groupOf(s) as string)),
+      );
       const memberIdsByGroup = new Map<string, string[]>();
-      for (const m of memberRows ?? []) {
-        const g = m.group_id as string;
-        const arr = memberIdsByGroup.get(g) ?? [];
-        arr.push(m.user_id as string);
-        memberIdsByGroup.set(g, arr);
+      if (legacyGroups.length > 0) {
+        const { data: memberRows } = await admin
+          .from("group_memberships")
+          .select("group_id, user_id")
+          .in("group_id", legacyGroups);
+        for (const m of memberRows ?? []) {
+          const g = m.group_id as string;
+          const arr = memberIdsByGroup.get(g) ?? [];
+          arr.push(m.user_id as string);
+          memberIdsByGroup.set(g, arr);
+        }
       }
 
       const result: Record<string, SMeterSummary> = {};
       for (const s of allowed) {
-        const group = threadGroup.get(s.thread_id as string) ?? "";
-        const participants = (s.participant_ids as string[] | null) ?? memberIdsByGroup.get(group) ?? [];
+        const participants =
+          (s.participant_ids as string[] | null) ?? memberIdsByGroup.get(groupOf(s) as string) ?? [];
         const participantSet = new Set(participants);
         const voters = new Set(
           (responseRows ?? [])
@@ -196,23 +207,10 @@ export const smetersRouter = router({
         })
     )
     .mutation(async ({ ctx, input }) => {
-      const { supabase, profile } = ctx;
+      const { profile } = ctx;
       const admin = createAdminClient();
 
-      const { data: thread } = await supabase
-        .from("threads")
-        .select("group_id")
-        .eq("id", input.threadId)
-        .single();
-      if (!thread) throw new TRPCError({ code: "NOT_FOUND" });
-
-      const { data: membership } = await supabase
-        .from("group_memberships")
-        .select("id")
-        .eq("group_id", thread.group_id)
-        .eq("user_id", profile.id)
-        .single();
-      if (!membership) throw new TRPCError({ code: "FORBIDDEN" });
+      const thread = await assertThreadAccess(admin, input.threadId, profile.id);
 
       const customDates = input.mode === "dates" ? input.customDates ?? null : null;
       const customLabels = input.mode === "statements" ? input.customLabels ?? null : null;
@@ -254,36 +252,34 @@ export const smetersRouter = router({
       ]);
       if (msgErr || !message) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
 
-      // Notify the other participants (best-effort), scoped to the chosen set.
-      try {
-        const recipients = participantIds.filter((id) => id !== profile.id);
-        if (recipients.length > 0) {
-          const senderName =
-            (message.profiles as unknown as { display_name: string } | null)?.display_name ?? "Someone";
-
-          const { data: meta } = await admin
-            .from("threads")
-            .select("title, groups(name)")
-            .eq("id", input.threadId)
-            .single();
-          const groupName = (meta?.groups as unknown as { name: string } | null)?.name ?? "";
-          const threadTitle = (meta?.title as string | null) ?? "";
-          const location = `.${groupName}#${threadTitle}`;
-          const previewBody = `Started an S-meter${input.title ? `: ${input.title}` : ""}`;
-
-          await notifyParticipants(admin, recipients, {
-            threadId: input.threadId,
-            groupId: thread.group_id,
-            expoTitle: senderName,
-            subtitle: location,
-            expoBody: previewBody,
-            webTitle: senderName,
-            webBody: `${location}\n${previewBody}`,
-            tag: message.id as string,
-          });
-        }
-      } catch {
-        // best-effort; never block S-meter creation
+      // Notify the other participants after the response (best-effort).
+      const recipients = participantIds.filter((id) => id !== profile.id);
+      if (recipients.length > 0) {
+        const senderName =
+          (message.profiles as unknown as { display_name: string } | null)?.display_name ?? "Someone";
+        waitUntil(
+          (async () => {
+            const { data: meta } = await admin
+              .from("threads")
+              .select("title, groups(name)")
+              .eq("id", input.threadId)
+              .single();
+            const groupName = (meta?.groups as unknown as { name: string } | null)?.name ?? "";
+            const threadTitle = (meta?.title as string | null) ?? "";
+            const location = `.${groupName}#${threadTitle}`;
+            const previewBody = `Started an S-meter${input.title ? `: ${input.title}` : ""}`;
+            await notifyParticipants(admin, recipients, {
+              threadId: input.threadId,
+              groupId: thread.group_id,
+              expoTitle: senderName,
+              subtitle: location,
+              expoBody: previewBody,
+              webTitle: senderName,
+              webBody: `${location}\n${previewBody}`,
+              tag: message.id as string,
+            });
+          })().catch(() => {}),
+        );
       }
 
       return message;
@@ -302,26 +298,18 @@ export const smetersRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const { supabase, profile } = ctx;
+      const { profile } = ctx;
       const admin = createAdminClient();
 
-      const { data: smeter } = await admin
-        .from("smeters")
-        .select("id, thread_id, mode, custom_dates, custom_labels, participant_ids, title, created_by")
-        .eq("id", input.smeterId)
-        .single();
+      const [{ data: smeter }, groupId] = await Promise.all([
+        admin
+          .from("smeters")
+          .select("id, thread_id, mode, custom_dates, custom_labels, participant_ids, title, created_by")
+          .eq("id", input.smeterId)
+          .single(),
+        assertSmeterAccess(admin, input.smeterId, profile.id),
+      ]);
       if (!smeter) throw new TRPCError({ code: "NOT_FOUND" });
-
-      const { data: thread } = await admin.from("threads").select("group_id").eq("id", smeter.thread_id).single();
-      if (!thread) throw new TRPCError({ code: "NOT_FOUND" });
-
-      const { data: membership } = await supabase
-        .from("group_memberships")
-        .select("id")
-        .eq("group_id", thread.group_id)
-        .eq("user_id", profile.id)
-        .single();
-      if (!membership) throw new TRPCError({ code: "FORBIDDEN" });
 
       // Only participants may vote (null = everyone).
       const participantIds = smeter.participant_ids as string[] | null;
@@ -368,11 +356,12 @@ export const smetersRouter = router({
       if (error) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: error.message });
 
       // Completion: if this was the final participant to vote, post a system
-      // message ("… s-meter is done") and notify everyone. Best-effort.
-      try {
+      // message ("… s-meter is done") and notify everyone. Best-effort, and
+      // after the response.
+      waitUntil((async () => { try {
         const participants =
           participantIds ??
-          ((await admin.from("group_memberships").select("user_id").eq("group_id", thread.group_id)).data ?? []).map(
+          ((await admin.from("group_memberships").select("user_id").eq("group_id", groupId)).data ?? []).map(
             (m) => m.user_id as string
           );
         const participantSet = new Set(participants);
@@ -416,7 +405,7 @@ export const smetersRouter = router({
 
           await notifyParticipants(admin, participants.filter((id) => id !== profile.id), {
             threadId: smeter.thread_id,
-            groupId: thread.group_id,
+            groupId: groupId,
             expoTitle: doneText,
             subtitle: location,
             expoBody: "Everyone answered — tap to see the results",
@@ -428,6 +417,7 @@ export const smetersRouter = router({
       } catch {
         // best-effort; completion notice/publish must never fail the vote
       }
+      })());
 
       return { success: true };
     }),
@@ -438,26 +428,18 @@ export const smetersRouter = router({
   get: protectedProcedure
     .input(z.object({ smeterId: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
-      const { supabase, profile } = ctx;
+      const { profile } = ctx;
       const admin = createAdminClient();
 
-      const { data: smeter } = await admin
-        .from("smeters")
-        .select("id, thread_id, mode, custom_dates, custom_labels, title, participant_ids, created_by, created_at")
-        .eq("id", input.smeterId)
-        .single();
+      const [{ data: smeter }, groupId] = await Promise.all([
+        admin
+          .from("smeters")
+          .select("id, thread_id, mode, custom_dates, custom_labels, title, participant_ids, created_by, created_at")
+          .eq("id", input.smeterId)
+          .single(),
+        assertSmeterAccess(admin, input.smeterId, profile.id),
+      ]);
       if (!smeter) throw new TRPCError({ code: "NOT_FOUND" });
-
-      const { data: thread } = await admin.from("threads").select("group_id").eq("id", smeter.thread_id).single();
-      if (!thread) throw new TRPCError({ code: "NOT_FOUND" });
-
-      const { data: membership } = await supabase
-        .from("group_memberships")
-        .select("id")
-        .eq("group_id", thread.group_id)
-        .eq("user_id", profile.id)
-        .single();
-      if (!membership) throw new TRPCError({ code: "FORBIDDEN" });
 
       const mode = smeter.mode as string;
       const customDates = (smeter.custom_dates as string[] | null) ?? null;
@@ -465,7 +447,7 @@ export const smetersRouter = router({
       const expected = expectedDays(mode, customDates, customLabels);
 
       const [{ data: memberRows }, { data: responseRows }] = await Promise.all([
-        admin.from("group_memberships").select("profiles(id, display_name, avatar_url)").eq("group_id", thread.group_id),
+        admin.from("group_memberships").select("profiles(id, display_name, avatar_url)").eq("group_id", groupId),
         admin
           .from("smeter_responses")
           .select("user_id, day_index, pain_score, profiles(display_name)")

@@ -128,18 +128,26 @@ export const profileRouter = router({
   // Blob state for everyone who shares a group with the caller (and the caller).
   blobs: protectedProcedure.query(async ({ ctx }) => {
     const admin = createAdminClient();
-    const { data: mine } = await admin
-      .from("group_memberships")
-      .select("group_id")
-      .eq("user_id", ctx.profile.id);
-    const groupIds = (mine ?? []).map((r) => r.group_id as string);
-    const { data: peers } = groupIds.length
-      ? await admin.from("group_memberships").select("user_id").in("group_id", groupIds)
-      : { data: [] as { user_id: string }[] };
-    const ids = Array.from(new Set([ctx.profile.id, ...(peers ?? []).map((r) => r.user_id as string)]));
-
-    const { data, error } = await admin.from("profiles").select(BLOB_COLUMNS).in("id", ids);
+    // Peers via one nested query; my own row in parallel (I may be in no group).
+    const [{ data: nested, error }, { data: me }] = await Promise.all([
+      admin
+        .from("group_memberships")
+        .select(`groups(group_memberships(profiles(${BLOB_COLUMNS})))`)
+        .eq("user_id", ctx.profile.id),
+      admin.from("profiles").select(BLOB_COLUMNS).eq("id", ctx.profile.id),
+    ]);
     if (error) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: error.message });
+
+    const rows = new Map<string, Record<string, unknown>>();
+    for (const r of (me ?? []) as unknown as Record<string, unknown>[]) rows.set(r.id as string, r);
+    for (const m of (nested ?? []) as unknown as {
+      groups: { group_memberships: { profiles: Record<string, unknown> | null }[] } | null;
+    }[]) {
+      for (const gm of m.groups?.group_memberships ?? []) {
+        if (gm.profiles) rows.set(gm.profiles.id as string, gm.profiles);
+      }
+    }
+    const data = Array.from(rows.values());
 
     const out: Record<string, BlobState> = {};
     for (const row of data ?? []) out[row.id as string] = blobStateFromRow(row);

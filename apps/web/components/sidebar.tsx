@@ -450,36 +450,45 @@ export function Sidebar({
   });
   const { isOpen, close } = useMobileSidebar();
 
-  // Keep the per-group unread dots live: any thread change (new message bumps
-  // updated_at) or read-marker change refreshes the counts — across all groups,
-  // not just the one currently open.
+  // Keep the per-group unread dots live: my own read markers, and thread
+  // changes (new message bumps updated_at) in my groups only. Bursts coalesce
+  // into one refetch.
+  const groupIdsKey = groups.map((g) => g.id).sort().join(",");
   useEffect(() => {
     const supabase = createClient();
     let channel: ReturnType<typeof supabase.channel> | null = null;
     let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const bump = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => void utils.groups.unread.invalidate(), 300);
+    };
     (async () => {
       const { data } = await supabase.auth.getSession();
       if (data.session) setRealtimeAuth(supabase, data.session.access_token);
       if (cancelled) return;
-      channel = supabase
+      let ch = supabase
         .channel("sidebar:unread")
         .on(
           "postgres_changes",
-          { event: "*", schema: "public", table: "threads" },
-          () => utils.groups.unread.invalidate(),
-        )
-        .on(
+          { event: "*", schema: "public", table: "thread_reads", filter: `user_id=eq.${userId}` },
+          bump,
+        );
+      if (groupIdsKey) {
+        ch = ch.on(
           "postgres_changes",
-          { event: "*", schema: "public", table: "thread_reads" },
-          () => utils.groups.unread.invalidate(),
-        )
-        .subscribe();
+          { event: "*", schema: "public", table: "threads", filter: `group_id=in.(${groupIdsKey})` },
+          bump,
+        );
+      }
+      channel = ch.subscribe();
     })();
     return () => {
       cancelled = true;
+      if (timer) clearTimeout(timer);
       if (channel) supabase.removeChannel(channel);
     };
-  }, [utils]);
+  }, [utils, userId, groupIdsKey]);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {

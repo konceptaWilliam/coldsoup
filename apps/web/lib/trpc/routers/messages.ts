@@ -8,59 +8,9 @@ import { chance, formShape, SHINY2_ODDS, SHINY3_ODDS } from "@/lib/blob-evolutio
 import { baseShapeOf } from "@/lib/blob-base";
 import { cryptoRand } from "@/lib/blob-server";
 import { assertThreadAccess } from "../thread-access";
-
-// Run background work after the response flushes without Vercel freezing the
-// function mid-flight. Mirrors @vercel/functions' waitUntil by reading Vercel's
-// request-context symbol; off-Vercel (dev / self-host) the Node process is
-// long-lived, so a plain fire-and-forget is safe.
-function waitUntil(promise: Promise<unknown>) {
-  const ctx = (globalThis as Record<symbol, unknown>)[
-    Symbol.for("@vercel/request-context")
-  ] as { get?: () => { waitUntil?: (p: Promise<unknown>) => void } } | undefined;
-  const fn = ctx?.get?.()?.waitUntil;
-  if (fn) fn(promise);
-  else void promise.catch(() => {});
-}
+import { waitUntil } from "@/lib/wait-until";
 
 const REACTION_TYPES = ["👍", "👎", "❤️", "🎉", "😂", "❓"] as const;
-
-// Total unread-thread count for a user across all their groups — a thread is
-// unread when its updated_at is newer than the caller's thread_reads marker.
-// Drives the PWA app-icon badge (sent in the push payload). Same definition as
-// groups.unread, summed across groups.
-async function unreadThreadCount(
-  admin: ReturnType<typeof createAdminClient>,
-  userId: string
-): Promise<number> {
-  const { data: memberships } = await admin
-    .from("group_memberships")
-    .select("group_id")
-    .eq("user_id", userId);
-  const groupIds = (memberships ?? []).map((m) => m.group_id as string);
-  if (groupIds.length === 0) return 0;
-
-  const { data: threads } = await admin
-    .from("threads")
-    .select("id, updated_at")
-    .in("group_id", groupIds);
-  if (!threads || threads.length === 0) return 0;
-
-  const { data: reads } = await admin
-    .from("thread_reads")
-    .select("thread_id, last_read_at")
-    .eq("user_id", userId)
-    .in("thread_id", threads.map((t) => t.id as string));
-  const readAt = new Map(
-    (reads ?? []).map((r) => [r.thread_id as string, new Date(r.last_read_at as string).getTime()])
-  );
-
-  let count = 0;
-  for (const t of threads) {
-    const updated = new Date(t.updated_at as string).getTime();
-    if (updated > (readAt.get(t.id as string) ?? 0)) count++;
-  }
-  return count;
-}
 
 // Describe a body-less message for notification/preview text by its first
 // attachment, matching the thread-list media labels.
@@ -553,12 +503,11 @@ export const messagesRouter = router({
               // Real per-user unread-thread count → drives the PWA app-icon
               // badge (instead of the SW counting undismissed notifications).
               const subscribedUserIds = Array.from(new Set(subs.map((s) => s.user_id as string)));
+              const { data: badgeRows } = await admin.rpc("unread_thread_counts_for", {
+                p_users: subscribedUserIds,
+              });
               const badgeByUser = new Map(
-                await Promise.all(
-                  subscribedUserIds.map(
-                    async (uid) => [uid, await unreadThreadCount(admin, uid)] as const
-                  )
-                )
+                ((badgeRows ?? []) as { user_id: string; unread: number }[]).map((r) => [r.user_id, Number(r.unread)]),
               );
               // Collapse on the thread (not the message id): multiple messages
               // in the same thread replace into ONE OS notification showing the
@@ -616,18 +565,21 @@ export const messagesRouter = router({
 
       const { data: message } = await admin
         .from("messages")
-        .select("id, user_id")
+        .select("id, user_id, thread_id")
         .eq("id", input.messageId)
         .single();
 
       if (!message) throw new TRPCError({ code: "NOT_FOUND" });
       if (message.user_id !== profile.id) throw new TRPCError({ code: "FORBIDDEN" });
+      // A user removed from the group can no longer change their old messages.
+      await assertThreadAccess(admin, message.thread_id as string, profile.id);
 
       const now = new Date().toISOString();
       const { data, error } = await admin
         .from("messages")
         .update({ body: input.body, edited_at: now })
         .eq("id", input.messageId)
+        .eq("user_id", profile.id)
         .select("id, body, edited_at")
         .single();
 
@@ -643,37 +595,14 @@ export const messagesRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const { supabase, profile } = ctx;
       const admin = createAdminClient();
-
-      const { data: message } = await supabase
-        .from("messages")
-        .select("id")
-        .eq("id", input.messageId)
-        .single();
-
-      if (!message) throw new TRPCError({ code: "NOT_FOUND" });
-
-      const { data: existing } = await admin
-        .from("message_reactions")
-        .select("id")
-        .eq("message_id", input.messageId)
-        .eq("user_id", profile.id)
-        .eq("type", input.type)
-        .maybeSingle();
-
-      if (existing) {
-        const { error } = await admin.from("message_reactions").delete().eq("id", existing.id);
-        if (error) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: error.message });
-      } else {
-        const { error } = await admin.from("message_reactions").insert({
-          message_id: input.messageId,
-          user_id: profile.id,
-          type: input.type,
-        });
-        if (error) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: error.message });
-      }
-
+      const { data, error } = await admin.rpc("reaction_toggle", {
+        p_message: input.messageId,
+        p_user: ctx.profile.id,
+        p_type: input.type,
+      });
+      if (error) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: error.message });
+      if (!(data as unknown[] | null)?.length) throw new TRPCError({ code: "NOT_FOUND" });
       return { success: true };
     }),
 
@@ -685,17 +614,20 @@ export const messagesRouter = router({
 
       const { data: message } = await admin
         .from("messages")
-        .select("id, user_id")
+        .select("id, user_id, thread_id")
         .eq("id", input.messageId)
         .single();
 
       if (!message) throw new TRPCError({ code: "NOT_FOUND" });
       if (message.user_id !== profile.id) throw new TRPCError({ code: "FORBIDDEN" });
+      // A user removed from the group can no longer change their old messages.
+      await assertThreadAccess(admin, message.thread_id as string, profile.id);
 
       const { error } = await admin
         .from("messages")
         .update({ is_deleted: true })
-        .eq("id", input.messageId);
+        .eq("id", input.messageId)
+        .eq("user_id", profile.id);
 
       if (error) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: error.message });
       return { success: true };
@@ -707,19 +639,20 @@ export const messagesRouter = router({
       const { supabase } = ctx;
       const admin = createAdminClient();
 
-      const { data: membership } = await supabase
-        .from("group_memberships")
-        .select("id")
-        .eq("group_id", input.groupId)
-        .eq("user_id", ctx.profile.id)
-        .single();
+      const [{ data: membership }, { data }] = await Promise.all([
+        supabase
+          .from("group_memberships")
+          .select("id")
+          .eq("group_id", input.groupId)
+          .eq("user_id", ctx.profile.id)
+          .maybeSingle(),
+        admin
+          .from("group_memberships")
+          .select("role, profiles(id, display_name, avatar_url)")
+          .eq("group_id", input.groupId),
+      ]);
 
       if (!membership) throw new TRPCError({ code: "FORBIDDEN" });
-
-      const { data } = await admin
-        .from("group_memberships")
-        .select("role, profiles(id, display_name, avatar_url)")
-        .eq("group_id", input.groupId);
 
       return ((data ?? [])
         .map((row) => {

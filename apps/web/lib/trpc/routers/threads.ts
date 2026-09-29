@@ -12,20 +12,9 @@ export const threadsRouter = router({
   list: protectedProcedure
     .input(z.object({ groupId: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
-      const { supabase, profile } = ctx;
+      const { supabase } = ctx;
 
-      // Verify user is member of this group
-      const { data: membership } = await supabase
-        .from("group_memberships")
-        .select("id")
-        .eq("group_id", input.groupId)
-        .eq("user_id", profile.id)
-        .single();
-
-      if (!membership) {
-        throw new TRPCError({ code: "FORBIDDEN", message: "Not a member of this group" });
-      }
-
+      // RLS on threads already limits rows to the caller's groups.
       const { data, error } = await supabase
         .from("threads")
         .select(
@@ -89,23 +78,14 @@ export const threadsRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const { supabase, profile } = ctx;
+      const { profile } = ctx;
       const admin = createAdminClient();
 
-      const { data: thread } = await supabase
-        .from("threads")
-        .select("group_id, due_date")
-        .eq("id", input.threadId)
-        .single();
+      const [, { data: thread }] = await Promise.all([
+        assertThreadAccess(admin, input.threadId, profile.id),
+        admin.from("threads").select("due_date").eq("id", input.threadId).single(),
+      ]);
       if (!thread) throw new TRPCError({ code: "NOT_FOUND" });
-
-      const { data: membership } = await supabase
-        .from("group_memberships")
-        .select("id")
-        .eq("group_id", thread.group_id)
-        .eq("user_id", profile.id)
-        .single();
-      if (!membership) throw new TRPCError({ code: "FORBIDDEN" });
 
       if (input.dueDate === undefined) return { success: true };
 
@@ -137,23 +117,10 @@ export const threadsRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const { supabase, profile } = ctx;
+      const { profile } = ctx;
       const admin = createAdminClient();
 
-      const { data: thread } = await supabase
-        .from("threads")
-        .select("group_id, title")
-        .eq("id", input.threadId)
-        .single();
-      if (!thread) throw new TRPCError({ code: "NOT_FOUND" });
-
-      const { data: membership } = await supabase
-        .from("group_memberships")
-        .select("id")
-        .eq("group_id", thread.group_id)
-        .eq("user_id", profile.id)
-        .single();
-      if (!membership) throw new TRPCError({ code: "FORBIDDEN" });
+      const thread = await assertThreadAccess(admin, input.threadId, profile.id);
 
       const title = input.title.trim();
       if (!title) throw new TRPCError({ code: "BAD_REQUEST", message: "Title required" });
@@ -225,29 +192,10 @@ export const threadsRouter = router({
   delete: protectedProcedure
     .input(z.object({ threadId: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
-      const { supabase, profile } = ctx;
+      const { profile } = ctx;
       const admin = createAdminClient();
 
-      const { data: thread } = await supabase
-        .from("threads")
-        .select("group_id")
-        .eq("id", input.threadId)
-        .single();
-
-      if (!thread) {
-        throw new TRPCError({ code: "NOT_FOUND" });
-      }
-
-      const { data: membership } = await supabase
-        .from("group_memberships")
-        .select("id")
-        .eq("group_id", thread.group_id)
-        .eq("user_id", profile.id)
-        .single();
-
-      if (!membership) {
-        throw new TRPCError({ code: "FORBIDDEN" });
-      }
+      await assertThreadAccess(admin, input.threadId, profile.id);
 
       const { error } = await admin
         .from("threads")
@@ -332,21 +280,22 @@ export const threadsRouter = router({
     )
     .query(async ({ ctx, input }) => {
       const { supabase, profile } = ctx;
-
-      const { data: membership } = await supabase
-        .from("group_memberships")
-        .select("id")
-        .eq("group_id", input.groupId)
-        .eq("user_id", profile.id)
-        .single();
-      if (!membership) throw new TRPCError({ code: "FORBIDDEN" });
-
       const admin = createAdminClient();
-      const { data, error } = await admin.rpc("thread_unread_counts", {
-        p_user: profile.id,
-        p_group: input.groupId,
-        p_since: input.since,
-      });
+
+      const [{ data: membership }, { data, error }] = await Promise.all([
+        supabase
+          .from("group_memberships")
+          .select("id")
+          .eq("group_id", input.groupId)
+          .eq("user_id", profile.id)
+          .maybeSingle(),
+        admin.rpc("thread_unread_counts", {
+          p_user: profile.id,
+          p_group: input.groupId,
+          p_since: input.since,
+        }),
+      ]);
+      if (!membership) throw new TRPCError({ code: "FORBIDDEN" });
       if (error) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: error.message });
 
       const result: Record<string, number> = {};
@@ -439,30 +388,10 @@ export const threadsRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const { supabase, profile } = ctx;
+      const { profile } = ctx;
       const admin = createAdminClient();
 
-      // Verify membership using user's client
-      const { data: thread } = await supabase
-        .from("threads")
-        .select("group_id, status")
-        .eq("id", input.threadId)
-        .single();
-
-      if (!thread) {
-        throw new TRPCError({ code: "NOT_FOUND" });
-      }
-
-      const { data: membership } = await supabase
-        .from("group_memberships")
-        .select("id")
-        .eq("group_id", thread.group_id)
-        .eq("user_id", profile.id)
-        .single();
-
-      if (!membership) {
-        throw new TRPCError({ code: "FORBIDDEN" });
-      }
+      const thread = await assertThreadAccess(admin, input.threadId, profile.id);
 
       const fromStatus = thread.status as "OPEN" | "URGENT" | "DONE";
 
