@@ -47,8 +47,8 @@ test("levelFor boundaries", () => {
   assert.equal(levelFor(0), 1);
   assert.equal(levelFor(49), 1);
   assert.equal(levelFor(50), 2);
-  assert.equal(levelFor(499), 2);
-  assert.equal(levelFor(500), 3);
+  assert.equal(levelFor(199), 2);
+  assert.equal(levelFor(200), 3);
   assert.equal(levelFor(9000), 3);
 });
 
