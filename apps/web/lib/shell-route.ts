@@ -17,11 +17,41 @@ export function isShellPath(path: string): boolean {
   return SHELL_RE.test(path.split(/[?#]/)[0]);
 }
 
+function stripQuery(path: string): string {
+  return path.split(/[?#]/)[0];
+}
+
+// Shell history is at most two levels: a group list (depth 0) and one thread
+// on top (depth 1). Back from a thread therefore always means "that thread's
+// list", however the thread was reached.
+export type NavOp = "push" | "replace" | "back";
+
+export function planNavigation(currentDepth: number, targetPath: string): NavOp {
+  const toThread = parseShellRoute(stripQuery(targetPath)).threadId !== null;
+  if (currentDepth > 0) return toThread ? "replace" : "back";
+  return toThread ? "push" : "replace";
+}
+
+// After a pop that left a thread, the path the shell should show instead of
+// the landed one, or null when the landing is already right (or not ours).
+export function resolvePop(
+  lastRoute: ShellRoute | null,
+  landedPath: string,
+  pendingTarget: string | null
+): string | null {
+  if (!isShellPath(landedPath)) return null;
+  if (!lastRoute?.threadId) return null;
+  const desired = pendingTarget ?? `/g/${lastRoute.groupId}`;
+  return landedPath === desired ? null : desired;
+}
+
 // pushState is only safe while the shell is mounted: from any other page the
 // app router would keep rendering that page under the new URL.
 let shellMounted = false;
 export function setShellMounted(mounted: boolean): void {
   shellMounted = mounted;
+  lastRoute = mounted ? parseShellRoute(window.location.pathname) : null;
+  pendingTarget = null;
 }
 export function isShellMounted(): boolean {
   return shellMounted;
@@ -33,9 +63,10 @@ function currentDepth(): number {
   return (window.history.state as ShellHistoryState)?.shellDepth ?? 0;
 }
 
-export function navigate(path: string): void {
-  window.history.pushState({ shellDepth: currentDepth() + 1 }, "", path);
-}
+// Route of the entry the shell is showing, and where a pending
+// thread -> list navigation should land once its history.back() pops.
+let lastRoute: ShellRoute | null = null;
+let pendingTarget: string | null = null;
 
 // Set by navigateBack so the stack knows a pop came from our own UI (back
 // button / swipe) rather than the browser.
@@ -46,11 +77,46 @@ export function consumeInternalBack(): boolean {
   return v;
 }
 
+export function navigate(path: string): void {
+  const depth = currentDepth();
+  const op = planNavigation(depth, path);
+  if (op === "back") {
+    // Drop the thread entry; the pop normalizer lands us on `path`.
+    pendingTarget = path;
+    internalBack = true;
+    window.history.back();
+    return;
+  }
+  if (op === "push") window.history.pushState({ shellDepth: 1 }, "", path);
+  else window.history.replaceState({ shellDepth: depth > 0 ? 1 : 0 }, "", path);
+  lastRoute = parseShellRoute(stripQuery(path));
+}
+
 // Back within the shell when we pushed the current entry; otherwise (deep
 // link, reload) replace the current entry with the fallback so the hardware
 // back button still leaves the app instead of bouncing to the thread.
 export function navigateBack(fallbackPath: string): void {
   internalBack = true;
-  if (currentDepth() > 0) window.history.back();
-  else window.history.replaceState({ shellDepth: 0 }, "", fallbackPath);
+  if (currentDepth() > 0) {
+    window.history.back();
+    return;
+  }
+  window.history.replaceState({ shellDepth: 0 }, "", fallbackPath);
+  lastRoute = parseShellRoute(stripQuery(fallbackPath));
+}
+
+// Keeps "back from a thread" pinned to that thread's list, whichever entry
+// the pop actually landed on (another thread, another group's list).
+function onPopState(): void {
+  if (!shellMounted) return;
+  const landed = window.location.pathname + window.location.search;
+  const fix = resolvePop(lastRoute, landed, pendingTarget);
+  pendingTarget = null;
+  if (fix) window.history.replaceState({ shellDepth: 0 }, "", fix);
+  const final = fix ?? landed;
+  lastRoute = isShellPath(final) ? parseShellRoute(stripQuery(final)) : null;
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("popstate", onPopState, true);
 }
