@@ -10,6 +10,7 @@ import { StatusBadge } from "./status-badge";
 import { Avatar } from "./avatar";
 import { useUnread, getLastSeen, setLastSeen } from "@/lib/unread-context";
 import { useMobileSidebar } from "@/lib/mobile-sidebar-context";
+import { onResubscribe } from "@/lib/on-resubscribe";
 
 // Loaded on first open — keeps these (and the calendar event dialog) out of
 // the first-load bundle.
@@ -384,9 +385,11 @@ export function ThreadList({ groupId, groupName }: { groupId: string; groupName:
     [utils],
   );
 
+  // Refetch on foreground: realtime events sent while the PWA was suspended
+  // (e.g. the message behind a tapped notification) never arrive.
   const { data: rawThreads = [], isLoading } = trpc.threads.list.useQuery(
     { groupId },
-    { refetchOnWindowFocus: false }
+    { refetchOnWindowFocus: true }
   );
   const { data: notifPrefs } = trpc.notifications.prefs.useQuery();
 
@@ -441,7 +444,7 @@ export function ThreadList({ groupId, groupName }: { groupId: string; groupName:
 
   const { data: serverCounts } = trpc.threads.unreadCounts.useQuery(
     { groupId, since },
-    { enabled: threads.length > 0 }
+    { enabled: threads.length > 0, refetchOnWindowFocus: true }
   );
 
   // Push real per-thread counts into the shared unread store (drives the badge
@@ -462,18 +465,20 @@ export function ThreadList({ groupId, groupName }: { groupId: string; groupName:
   // Realtime: invalidate thread list on any change (new messages update thread.updated_at)
   useEffect(() => {
     const supabase = createClient();
+    const refresh = () => {
+      utils.threads.list.invalidate({ groupId });
+      utils.threads.unreadCounts.invalidate({ groupId });
+    };
 
     const channel = supabase
       .channel(`threads:group:${groupId}`)
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "threads", filter: `group_id=eq.${groupId}` },
-        () => {
-          utils.threads.list.invalidate({ groupId });
-          utils.threads.unreadCounts.invalidate({ groupId });
-        }
+        refresh
       )
-      .subscribe();
+      // Reconnect: catch up on anything missed while the socket was down.
+      .subscribe(onResubscribe(refresh));
 
     return () => { supabase.removeChannel(channel); };
   }, [groupId, utils]);

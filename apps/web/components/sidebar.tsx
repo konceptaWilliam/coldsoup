@@ -10,6 +10,7 @@ import { useMobileSidebar } from "@/lib/mobile-sidebar-context";
 import { setLastSeen } from "@/lib/unread-context";
 import { trpc } from "@/lib/trpc/client";
 import { createClient, setRealtimeAuth } from "@/lib/supabase/client";
+import { onResubscribe } from "@/lib/on-resubscribe";
 
 // Loaded on first open — keeps search out of the first-load bundle.
 const SearchDialog = dynamic(() => import("./search-dialog").then((m) => m.SearchDialog), { ssr: false });
@@ -445,8 +446,10 @@ export function Sidebar({
       setMenuOpen(false);
     },
   });
+  // Refetch on foreground: realtime events sent while suspended are lost.
   const { data: unread = {} } = trpc.groups.unread.useQuery(undefined, {
     staleTime: 30_000,
+    refetchOnWindowFocus: true,
   });
   const { isOpen, close } = useMobileSidebar();
 
@@ -481,7 +484,8 @@ export function Sidebar({
           bump,
         );
       }
-      channel = ch.subscribe();
+      // Reconnect: catch up on anything missed while the socket was down.
+      channel = ch.subscribe(onResubscribe(bump));
     })();
     return () => {
       cancelled = true;
