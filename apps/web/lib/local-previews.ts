@@ -14,6 +14,8 @@ export function localPreview(url: string): string | undefined {
 export function releaseLocalPreviews(objectUrls: string[]): void {
   if (objectUrls.length === 0) return;
   const set = new Set(objectUrls);
-  for (const [remote, local] of previews) if (set.has(local)) previews.delete(remote);
+  previews.forEach((local, remote) => {
+    if (set.has(local)) previews.delete(remote);
+  });
   for (const url of objectUrls) URL.revokeObjectURL(url);
 }
