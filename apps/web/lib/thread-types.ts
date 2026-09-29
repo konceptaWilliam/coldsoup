@@ -7,6 +7,9 @@ export type Attachment = {
   url: string;
   type: "image" | "audio" | "video" | "file";
   name: string;
+  // Intrinsic media size, recorded at upload (absent on older attachments).
+  width?: number;
+  height?: number;
 };
 
 export type Reaction = {
