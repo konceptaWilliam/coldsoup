@@ -1,6 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { Expression } from "blobatar";
+import * as X from "blobatar/expression";
+import { gaze } from "blobatar/gaze";
 import {
   DEFAULT_BLOB,
   EVOLUTION,
@@ -13,13 +16,35 @@ import { baseShapeOf } from "@/lib/blob-base";
 import { BlobForm } from "@/components/blob-form";
 import { EvolveModal, evolveSpec, rerollSpec, type RevealSpec } from "@/components/evolve-modal";
 
+const EXPRESSIONS = {
+  none: undefined, happy: X.happy, sad: X.sad, mad: X.mad, surprised: X.surprised,
+  wink: X.wink, sleepy: X.sleepy, love: X.love, scared: X.scared, thinking: X.thinking,
+} as Record<string, Expression | undefined>;
+const SIZES = [28, 40, 64];
+
 // Drives the real components with local state; touches no data.
 export function BlobLab() {
+  const [expr, setExpr] = useState("none");
+  const [still, setStill] = useState(false);
+  const [follow, setFollow] = useState(true);
+  const rowRef = useRef<HTMLElement>(null);
   const [seed, setSeed] = useState("11111111-2222-3333-4444-555555555555");
   const [state, setState] = useState<BlobState>({ ...DEFAULT_BLOB, level: 3 });
   const [spec, setSpec] = useState<RevealSpec | null>(null);
   const base = baseShapeOf(seed);
   const toggle = (k: "shiny2" | "shiny3") => setState((s) => ({ ...s, [k]: !s[k] }));
+  const expression = EXPRESSIONS[expr];
+
+  // Same wiring as <Avatar followPointer>: one gaze driver per svg layer.
+  useEffect(() => {
+    if (!follow || still) return;
+    const svgs = Array.from(rowRef.current?.querySelectorAll("svg") ?? []);
+    const drivers = svgs.map((svg) => {
+      svg.style.setProperty("--mo-track-travel", "3px");
+      return gaze(svg, { target: "pointer" });
+    });
+    return () => drivers.forEach((g) => g.stop());
+  }, [follow, still, seed, state, expr]);
 
   return (
     <main className="max-w-3xl mx-auto p-6 space-y-8">
@@ -51,10 +76,48 @@ export function BlobLab() {
         ))}
       </div>
 
-      <section className="flex gap-8 items-end">
+      <div className="flex flex-wrap gap-2 font-mono text-xs">
+        <button className="border border-border px-3 py-1.5" onClick={() => setSeed(crypto.randomUUID())}>
+          random seed
+        </button>
+        <button className="border border-border px-3 py-1.5" onClick={() => setStill((v) => !v)}>
+          {still ? "static" : "animated"}
+        </button>
+        <button className="border border-border px-3 py-1.5" onClick={() => setFollow((v) => !v)}>
+          gaze: {String(follow)}
+        </button>
+        {Object.keys(EXPRESSIONS).map((k) => (
+          <button
+            key={k}
+            className={`border px-3 py-1.5 ${k === expr ? "border-ink text-ink" : "border-border"}`}
+            onClick={() => setExpr(k)}
+          >
+            {k}
+          </button>
+        ))}
+      </div>
+
+      <section ref={rowRef} className="flex gap-8 items-end">
         {([1, 2, 3] as Form[]).map((f) => (
           <div key={f} className="flex flex-col items-center gap-2 font-mono text-xs text-muted">
-            <BlobForm name={seed} look={formLook(base, f, state)} size={120} animate="always" />
+            <BlobForm
+              name={seed}
+              look={formLook(base, f, state)}
+              size={120}
+              animate={still ? undefined : "always"}
+              expression={expression}
+            />
+            Lv{f}
+          </div>
+        ))}
+      </section>
+
+      <section className="flex flex-wrap gap-6 items-end">
+        {([1, 2, 3] as Form[]).map((f) => (
+          <div key={f} className="flex items-end gap-2 font-mono text-[10px] text-muted">
+            {SIZES.map((z) => (
+              <BlobForm key={z} name={seed} look={formLook(base, f, state)} size={z} />
+            ))}
             Lv{f}
           </div>
         ))}
