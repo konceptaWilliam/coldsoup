@@ -1,11 +1,13 @@
 "use client";
 
-import { forwardRef } from "react";
+import { forwardRef, useMemo } from "react";
 import { Blobatar } from "@blobatar/react";
 import { _layout, type Expression } from "blobatar";
 import { blobatarUri } from "blobatar/uri";
 import { blobTraits, finishLayers, hexHue, type FormLook } from "@/lib/blob-evolution";
+import { MIN_GLINT_SIZE, gemEye } from "@/lib/blob-eyes";
 import type { BlobatarAnimate } from "@/lib/avatar";
+import { GlintBlobatar } from "@/components/glint-blobatar";
 
 /** Locked forms in Settings / the profile card: body and eyes one grey. */
 export const SILHOUETTE = { head: "#9A988F", eye: "#9A988F" };
@@ -36,11 +38,20 @@ type Props = {
 // One form of a user's blob. The base layer is a normal <Blobatar>; a finish
 // stacks hue-shifted copies (same traits, so identical geometry) under
 // diagonal masks, plus a sheen masked to the blob's own silhouette.
+// Lv2+ (a pinned shape) also gets the seed's gem eyes: a pinned eye colour on
+// every layer, plus catchlights where there is room for them.
 export const BlobForm = forwardRef<HTMLSpanElement, Props>(function BlobForm(
   { name, look, size, animate, expression, palette, silhouette, title },
   ref,
 ) {
   const traits = silhouette ? SILHOUETTE_TRAITS : blobTraits(look.shape);
+  // Neutral blobs (explicit palette) and locked silhouettes keep plain eyes.
+  const gem = !silhouette && !palette && look.shape !== null;
+  const eyePalette = useMemo(() => {
+    if (!gem) return undefined;
+    const base = _layout(name).palette;
+    return { eye: gemEye(name, base.head ?? "#888888", base.eye ?? "#000000") };
+  }, [gem, name]);
   const common = {
     name: silhouette ? SILHOUETTE_SEED : name,
     traits,
@@ -50,7 +61,17 @@ export const BlobForm = forwardRef<HTMLSpanElement, Props>(function BlobForm(
     background: false as const,
   };
   const layer = (hue?: number, label?: string) =>
-    animate ? (
+    eyePalette ? (
+      <GlintBlobatar
+        {...common}
+        palette={eyePalette}
+        hue={hue}
+        animate={animate}
+        title={label}
+        alt={label ?? ""}
+        glints={size >= MIN_GLINT_SIZE}
+      />
+    ) : animate ? (
       <Blobatar {...common} hue={hue} animate={animate} title={label} />
     ) : (
       <Blobatar {...common} hue={hue} title={label} alt={label ?? ""} />
