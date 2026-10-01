@@ -4,6 +4,7 @@ importScripts("/sw-routes.js");
 
 const MEDIA_CACHE = "coldsoup-media-v1";
 const STATIC_CACHE = "coldsoup-static-v1";
+// lib/build-check.ts deletes SHELL_CACHE by name; rename both together.
 const SHELL_CACHE = "coldsoup-shell-v1";
 const CURRENT_CACHES = [MEDIA_CACHE, STATIC_CACHE, SHELL_CACHE];
 const STATIC_MAX_ENTRIES = 400;

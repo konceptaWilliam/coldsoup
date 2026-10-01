@@ -5,6 +5,7 @@ import { useShellNavigate } from "@/lib/use-shell-route";
 import { trpc } from "@/lib/trpc/client";
 import { InstallPrompt } from "./install-prompt";
 import { installChunkReload } from "@/lib/chunk-reload";
+import { installBuildCheck } from "@/lib/build-check";
 
 function urlBase64ToUint8Array(base64String: string) {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
@@ -32,6 +33,7 @@ export function PwaManager() {
   }, [go]);
   useEffect(() => {
     installChunkReload();
+    installBuildCheck();
   }, []);
 
   useEffect(() => {
