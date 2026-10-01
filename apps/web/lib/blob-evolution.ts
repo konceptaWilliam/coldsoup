@@ -11,9 +11,9 @@ export type Shape =
 export type Form = 1 | 2 | 3;
 export type Finish = "plain" | "holo" | "shiny";
 
-export const LV2_XP = 50;
-export const LV3_XP = 200;
-export const REROLL_EVERY = 200;
+export const LV2_XP = 30;
+export const LV3_XP = 150;
+export const REROLL_EVERY = 50;
 export const SHINY2_ODDS = 16;
 export const SHINY3_ODDS = 4;
 

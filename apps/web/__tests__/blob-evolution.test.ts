@@ -45,10 +45,10 @@ test("POS midpoints are inside [0, 1)", () => {
 
 test("levelFor boundaries", () => {
   assert.equal(levelFor(0), 1);
-  assert.equal(levelFor(49), 1);
-  assert.equal(levelFor(50), 2);
-  assert.equal(levelFor(199), 2);
-  assert.equal(levelFor(200), 3);
+  assert.equal(levelFor(29), 1);
+  assert.equal(levelFor(30), 2);
+  assert.equal(levelFor(149), 2);
+  assert.equal(levelFor(150), 3);
   assert.equal(levelFor(9000), 3);
 });
 
@@ -120,18 +120,18 @@ test("chance(n) hits only on 0", () => {
   assert.equal(seen, 16);
 });
 
-test("rerollReady needs Lv3, no shiny, 200 XP since last roll", () => {
-  const base = { level: 3 as const, shiny3: false, xp: 700, rerollXp: 500 };
+test("rerollReady needs Lv3, no shiny, 50 XP since last roll", () => {
+  const base = { level: 3 as const, shiny3: false, xp: 550, rerollXp: 500 };
   assert.equal(rerollReady(base), true);
-  assert.equal(rerollReady({ ...base, xp: 699 }), false);
+  assert.equal(rerollReady({ ...base, xp: 549 }), false);
   assert.equal(rerollReady({ ...base, shiny3: true }), false);
   assert.equal(rerollReady({ ...base, level: 2 }), false);
 });
 
-test("rerollProgress clamps to [0, 200] — charges never stack", () => {
+test("rerollProgress clamps to [0, 50] — charges never stack", () => {
   assert.equal(rerollProgress(500, 500), 0);
-  assert.equal(rerollProgress(643, 500), 143);
-  assert.equal(rerollProgress(5000, 500), 200);
+  assert.equal(rerollProgress(543, 500), 43);
+  assert.equal(rerollProgress(5000, 500), 50);
 });
 
 test("blobStateFromRow maps columns and rejects bad values", () => {
