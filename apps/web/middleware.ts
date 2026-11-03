@@ -52,7 +52,7 @@ export async function middleware(request: NextRequest) {
 
   // Public paths that don't need auth
   // /api/cron authenticates itself with CRON_SECRET.
-  const publicPaths = ["/login", "/auth/callback", "/auth/reset-password", "/invite", "/api/trpc", "/api/push", "/api/cron"];
+  const publicPaths = ["/login", "/auth/callback", "/auth/reset-password", "/invite", "/api/trpc", "/api/push", "/api/build", "/api/cron"];
   const isPublic = publicPaths.some((p) => pathname.startsWith(p));
 
   // Redirect unauthenticated users to login
