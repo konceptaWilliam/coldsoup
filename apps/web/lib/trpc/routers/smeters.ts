@@ -52,7 +52,7 @@ async function assertSmeterAccess(admin: AdminClient, smeterId: string, userId: 
 
 export const smetersRouter = router({
   // S-meters the caller was invited to and hasn't answered — drives the thread
-  // and group badges. See pending_smeters() (043).
+  // and group badges. See pending_smeters() (043; DONE threads skipped since 044).
   pending: protectedProcedure.query(async ({ ctx }) => {
     const admin = createAdminClient();
     const { data, error } = await admin.rpc("pending_smeters", { p_user: ctx.profile.id });
