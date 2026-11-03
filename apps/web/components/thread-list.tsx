@@ -9,6 +9,7 @@ import { createClient } from "@/lib/supabase/client";
 import { StatusBadge } from "./status-badge";
 import { Avatar } from "./avatar";
 import { useUnread, getLastSeen, setLastSeen } from "@/lib/unread-context";
+import { usePendingSmeters } from "@/lib/use-pending-smeters";
 import { useMobileSidebar } from "@/lib/mobile-sidebar-context";
 import { onResubscribe } from "@/lib/on-resubscribe";
 
@@ -369,6 +370,7 @@ export function ThreadList({ groupId, groupName }: { groupId: string; groupName:
   const [filter, setFilter] = useState<ThreadFilter>("ALL");
   const utils = trpc.useUtils();
   const { threadCounts, setThreadCount } = useUnread();
+  const { byThread: pendingSmeters } = usePendingSmeters();
   const { open: openSidebar } = useMobileSidebar();
 
   // Warm the message cache on hover/focus so opening a thread shows messages
@@ -468,6 +470,7 @@ export function ThreadList({ groupId, groupName }: { groupId: string; groupName:
     const refresh = () => {
       utils.threads.list.invalidate({ groupId });
       utils.threads.unreadCounts.invalidate({ groupId });
+      utils.smeters.pending.invalidate();
     };
 
     const channel = supabase
@@ -581,6 +584,7 @@ export function ThreadList({ groupId, groupName }: { groupId: string; groupName:
             const lastMessage = thread.messages?.[thread.messages.length - 1];
             const lastAuthor = lastMessage?.profiles?.display_name?.split(" ")[0];
             const unread = isActive ? 0 : (threadCounts[thread.id] ?? 0);
+            const pendingSmeter = pendingSmeters[thread.id] ?? 0;
             const isThreadMuted = !!notifPrefs?.threadIds.includes(thread.id);
             const overdue = thread.due_date ? isOverdue(thread.due_date) : false;
 
@@ -629,6 +633,19 @@ export function ThreadList({ groupId, groupName }: { groupId: string; groupName:
                     <span className="lowercase">{thread.title}</span>
                   </span>
                   <div className="flex items-center gap-1.5 flex-shrink-0">
+                    {pendingSmeter > 0 && (
+                      <span
+                        className="font-mono text-[10px] font-semibold leading-none px-1.5 py-1 min-w-[18px] text-center tabular-nums border"
+                        style={{
+                          background: "var(--pastel-tint)",
+                          borderColor: "var(--pastel-deep)",
+                          color: "var(--pastel-ink)",
+                        }}
+                        title="Obesvarad S-mätare"
+                      >
+                        {pendingSmeter > 1 ? `S·${pendingSmeter}` : "S"}
+                      </span>
+                    )}
                     {unread > 0 && (
                       <span
                         className="font-mono text-[10px] font-semibold leading-none px-1.5 py-1 min-w-[18px] text-center tabular-nums"

@@ -165,6 +165,7 @@ function SMeterModal({ smeterId, threadId, onClose }: { smeterId: string; thread
     onSuccess: () => {
       utils.smeters.get.invalidate({ smeterId });
       utils.messages.list.invalidate({ threadId });
+      utils.smeters.pending.invalidate();
     },
   });
 
