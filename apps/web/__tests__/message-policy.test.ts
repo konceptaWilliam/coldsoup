@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   isValidAttachmentUrl,
+  attachmentPathFromUrl,
   escapeLike,
   isMentioned,
   mentionsEveryone,
@@ -40,6 +41,42 @@ test("isValidAttachmentUrl: rejects a non-uuid folder", () => {
 
 test("isValidAttachmentUrl: rejects garbage input", () => {
   assert.equal(isValidAttachmentUrl("not a url", HOST), false);
+});
+
+const OTHER = "99999999-8888-7777-6666-555555555555";
+
+test("attachmentPathFromUrl: returns the object path for a valid URL", () => {
+  const url = `${HOST}/storage/v1/object/public/attachments/${UUID}/abc.mp4`;
+  assert.equal(attachmentPathFromUrl(url, HOST), `${UUID}/abc.mp4`);
+});
+
+test("attachmentPathFromUrl: owner check passes for the owner", () => {
+  const url = `${HOST}/storage/v1/object/public/attachments/${UUID}/abc.mp4`;
+  assert.equal(attachmentPathFromUrl(url, HOST, UUID), `${UUID}/abc.mp4`);
+});
+
+test("attachmentPathFromUrl: owner check rejects another user's file", () => {
+  const url = `${HOST}/storage/v1/object/public/attachments/${UUID}/abc.mp4`;
+  assert.equal(attachmentPathFromUrl(url, HOST, OTHER), null);
+});
+
+test("attachmentPathFromUrl: rejects a foreign host", () => {
+  const url = `https://evil.example.com/storage/v1/object/public/attachments/${UUID}/abc.mp4`;
+  assert.equal(attachmentPathFromUrl(url, HOST), null);
+});
+
+test("attachmentPathFromUrl: rejects another bucket", () => {
+  const url = `${HOST}/storage/v1/object/public/avatars/${UUID}/abc.png`;
+  assert.equal(attachmentPathFromUrl(url, HOST), null);
+});
+
+test("attachmentPathFromUrl: rejects encoded path separators", () => {
+  const url = `${HOST}/storage/v1/object/public/attachments/${UUID}/..%2F..%2Fx.png`;
+  assert.equal(attachmentPathFromUrl(url, HOST), null);
+});
+
+test("attachmentPathFromUrl: rejects garbage input", () => {
+  assert.equal(attachmentPathFromUrl("not a url", HOST), null);
 });
 
 test("escapeLike: escapes LIKE wildcards and the escape char", () => {

@@ -34,6 +34,26 @@ export function isValidAttachmentUrl(url: string, supabaseUrl: string): boolean 
   }
 }
 
+const ATTACHMENT_PREFIX = "/storage/v1/object/public/attachments/";
+// What our uploaders actually write: <userId>/<uuid>.<ext>. Anything with
+// %-escapes or ".." is refused, so a crafted URL can't name another object.
+const SAFE_OBJECT_PATH_RE = /^[0-9a-f-]{36}\/[a-z0-9._-]+$/i;
+
+// Storage object path (`<userId>/<file>`) of a valid attachment URL, or null.
+// With `ownerId`, also null unless the file is in that user's folder; callers
+// that delete files pass it so a tampered URL can't reach someone else's file.
+export function attachmentPathFromUrl(
+  url: string,
+  supabaseUrl: string,
+  ownerId?: string,
+): string | null {
+  if (!isValidAttachmentUrl(url, supabaseUrl)) return null;
+  const path = new URL(url).pathname.slice(ATTACHMENT_PREFIX.length);
+  if (!SAFE_OBJECT_PATH_RE.test(path) || path.includes("..")) return null;
+  if (ownerId && path.split("/")[0].toLowerCase() !== ownerId.toLowerCase()) return null;
+  return path;
+}
+
 // Escape LIKE/ILIKE wildcards so a query containing % or _ matches literally
 // (backslash is the default Postgres LIKE escape char).
 export function escapeLike(s: string): string {
