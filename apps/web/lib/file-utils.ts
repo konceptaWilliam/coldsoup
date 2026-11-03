@@ -1,5 +1,6 @@
-export const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25 MB — images, audio, docs
-export const MAX_VIDEO_SIZE = 25 * 1024 * 1024; // 25 MB — video (free-tier friendly)
+export const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25 MB — what may be uploaded (after compression)
+export const MAX_VIDEO_SIZE = 25 * 1024 * 1024; // 25 MB — video after compression (free-tier friendly)
+export const MAX_MEDIA_INPUT_SIZE = 500 * 1024 * 1024; // 500 MB — video/audio as picked, before compression
 
 const IMAGE_LIST = ["jpg", "jpeg", "png", "gif", "webp"];
 const AUDIO_LIST = ["mp3", "wav", "ogg", "m4a", "aac", "flac"];
@@ -45,9 +46,11 @@ export function attachmentTypeFor(file: { name: string; type: string }): Attachm
 
 export type FileValidationError = { file: string; reason: string };
 
+// Checked when a file is picked. Video and audio get the larger input limit
+// because they are compressed before upload; uploadSizeError checks the result.
 export function validateFile(file: File): FileValidationError | null {
-  const isVideo = attachmentTypeFor(file) === "video";
-  const limit = isVideo ? MAX_VIDEO_SIZE : MAX_FILE_SIZE;
+  const type = attachmentTypeFor(file);
+  const limit = type === "video" || type === "audio" ? MAX_MEDIA_INPUT_SIZE : MAX_FILE_SIZE;
   if (file.size > limit) {
     const mb = Math.round(limit / 1024 / 1024).toString();
     return { file: file.name, reason: `exceeds ${mb} MB limit (${(file.size / 1024 / 1024).toFixed(1)} MB)` };
@@ -57,6 +60,15 @@ export function validateFile(file: File): FileValidationError | null {
     return { file: file.name, reason: "file type not allowed" };
   }
   return null;
+}
+
+// Checked on the file that is about to be uploaded, after compression.
+export function uploadSizeError(file: File): string | null {
+  const limit = attachmentTypeFor(file) === "video" ? MAX_VIDEO_SIZE : MAX_FILE_SIZE;
+  if (file.size <= limit) return null;
+  const size = (file.size / 1024 / 1024).toFixed(1);
+  const max = Math.round(limit / 1024 / 1024);
+  return `${file.name}: ${size} MB after compression, limit is ${max} MB. Send a shorter clip.`;
 }
 
 const MAX_IMAGE_DIM = 1600;
