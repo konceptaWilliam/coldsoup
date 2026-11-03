@@ -1,4 +1,8 @@
 {
   "regions": ["fra1"],
-  "crons": [{ "path": "/api/cron/sweep-attachments", "schedule": "0 3 * * *" }]
+  "crons": [
+    { "path": "/api/cron/sweep-attachments", "schedule": "0 3 * * *" },
+    { "path": "/api/cron/smeter-reminders?slot=cest", "schedule": "0 7 * * *" },
+    { "path": "/api/cron/smeter-reminders?slot=cet", "schedule": "0 8 * * *" }
+  ]
 }
