@@ -86,6 +86,8 @@ export type Message = {
   fail_id?: string;
   upload_progress?: number;
   missing_files?: string[];
+  // Why a send failed for good (e.g. still too large after compression).
+  fail_reason?: string;
 };
 
 export type Me = { id: string; display_name: string; avatar_url: string | null };

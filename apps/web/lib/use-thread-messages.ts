@@ -23,7 +23,7 @@ import {
 } from "./thread-cache";
 import { REACTION_DEFAULTS, type Attachment, type Me, type Message, type ReplyTo } from "./thread-types";
 import { readOutbox, writeOutbox, type OutboxEntry } from "./outbox";
-import { uploadAttachments } from "./upload-attachments";
+import { AttachmentTooLargeError, uploadAttachments } from "./upload-attachments";
 import { registerLocalPreview, releaseLocalPreviews } from "./local-previews";
 
 type Member = { id: string; display_name: string; avatar_url: string | null };
@@ -50,6 +50,7 @@ type PendingEntry = {
   status: DispatchStatus;
   progress: number;
   permanent?: boolean;
+  failReason?: string;
 };
 
 export type SendInput = {
@@ -240,7 +241,7 @@ export function useThreadMessages({
         updateEntry(entry.key, { status: "ready" });
         return;
       }
-      updateEntry(entry.key, { status: "uploading", progress: 0 });
+      updateEntry(entry.key, { status: "uploading", progress: 0, failReason: undefined });
       uploadAttachments(toUpload, (progress) => updateEntry(entry.key, { progress }))
         .then((uploaded) => {
           setPending((prev) =>
@@ -251,7 +252,12 @@ export function useThreadMessages({
             ),
           );
         })
-        .catch(() => updateEntry(entry.key, { status: "failed" }));
+        .catch((err) =>
+          updateEntry(entry.key, {
+            status: "failed",
+            failReason: err instanceof AttachmentTooLargeError ? err.message : undefined,
+          }),
+        );
     },
     [updateEntry],
   );
@@ -385,6 +391,7 @@ export function useThreadMessages({
           fail_id: p.key,
           upload_progress: p.status === "uploading" ? p.progress : undefined,
           missing_files: p.missingFiles.length > 0 ? p.missingFiles : undefined,
+          fail_reason: p.status === "failed" ? p.failReason : undefined,
         });
       }),
     [pending, me, threadId],

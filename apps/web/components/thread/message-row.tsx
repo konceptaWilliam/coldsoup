@@ -613,7 +613,9 @@ function Row({
 
           {msg.delivery_status === "failed" && (
             <div className="flex items-center gap-2 mt-1">
-              {canRetry ? (
+              {msg.fail_reason ? (
+                <span className="font-mono text-[10px] text-red-600">{msg.fail_reason}</span>
+              ) : canRetry ? (
                 <button
                   onClick={() => msg.fail_id && actions.retry(msg.fail_id)}
                   className="font-mono text-[10px] text-red-600 hover:text-red-700"
