@@ -8,6 +8,7 @@ import { assertThreadAccess } from "../thread-access";
 import { accessibleByGroup } from "@/lib/server-shapes";
 import { waitUntil } from "@/lib/wait-until";
 import { notifyParticipants } from "@/lib/smeter-push";
+import type { PendingRow } from "@/lib/smeter-reminders";
 
 // ISO date (YYYY-MM-DD), as the standalone planner stores custom dates.
 const ISO_DATE = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Invalid date");
@@ -50,6 +51,20 @@ async function assertSmeterAccess(admin: AdminClient, smeterId: string, userId: 
 }
 
 export const smetersRouter = router({
+  // S-meters the caller was invited to and hasn't answered — drives the thread
+  // and group badges. See pending_smeters() (043).
+  pending: protectedProcedure.query(async ({ ctx }) => {
+    const admin = createAdminClient();
+    const { data, error } = await admin.rpc("pending_smeters", { p_user: ctx.profile.id });
+    if (error) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: error.message });
+    return ((data ?? []) as PendingRow[]).map((r) => ({
+      smeterId: r.smeter_id,
+      threadId: r.thread_id,
+      groupId: r.group_id,
+      messageId: r.message_id,
+    }));
+  }),
+
   // Light summaries (counts only — no scores) for a set of S-meters. Mirrors
   // polls.getMany; used on web to refresh inline cards live as votes land and
   // to fill a newly-arrived S-meter card without a full message refetch.
