@@ -71,5 +71,5 @@ export function reminderBatches(rows: PendingRow[]): ReminderBatch[] {
     }
     b.userIds.push(r.user_id);
   }
-  return [...bySmeter.values()];
+  return Array.from(bySmeter.values());
 }

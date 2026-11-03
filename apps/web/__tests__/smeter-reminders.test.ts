@@ -27,7 +27,7 @@ test("groupPending: counts per thread and collects groups", () => {
     { threadId: "t2", groupId: "g2" },
   ]);
   assert.deepEqual(out.byThread, { t1: 2, t2: 1 });
-  assert.deepEqual([...out.groups].sort(), ["g1", "g2"]);
+  assert.deepEqual(Array.from(out.groups).sort(), ["g1", "g2"]);
 });
 
 test("groupPending: empty", () => {
