@@ -7,6 +7,7 @@ const routes = require("../public/sw-routes.js") as {
   classify(url: URL, mode: string, origin: string): string;
   shellKey(url: URL): string;
   isCacheableShell(res: { ok: boolean; type: string; contentType: string }): boolean;
+  notificationUrl(data: Record<string, unknown> | null | undefined): string;
 };
 
 const O = "https://app.example";
@@ -58,4 +59,21 @@ test("isCacheableShell", () => {
   assert.equal(routes.isCacheableShell({ ok: false, type: "basic", contentType: "text/html" }), false);
   assert.equal(routes.isCacheableShell({ ok: true, type: "opaqueredirect", contentType: "" }), false);
   assert.equal(routes.isCacheableShell({ ok: true, type: "basic", contentType: "text/x-component" }), false);
+});
+
+test("notificationUrl: thread + group", () => {
+  assert.equal(routes.notificationUrl({ threadId: "t", groupId: "g" }), "/g/g/t/t");
+});
+
+test("notificationUrl: messageId deep-links with highlight", () => {
+  assert.equal(
+    routes.notificationUrl({ threadId: "t", groupId: "g", messageId: "m" }),
+    "/g/g/t/t?highlight=m",
+  );
+});
+
+test("notificationUrl: thread only / nothing", () => {
+  assert.equal(routes.notificationUrl({ threadId: "t" }), "/?thread=t");
+  assert.equal(routes.notificationUrl(null), "/");
+  assert.equal(routes.notificationUrl(undefined), "/");
 });

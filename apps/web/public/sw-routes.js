@@ -33,7 +33,23 @@
     return !!res.ok && res.type === "basic" && String(res.contentType || "").indexOf("text/html") !== -1;
   }
 
-  var api = { classify: classify, shellKey: shellKey, isCacheableShell: isCacheableShell };
+  // Where a notification tap lands. messageId → jump to and flash that message.
+  function notificationUrl(data) {
+    var d = data || {};
+    if (d.threadId && d.groupId) {
+      var base = "/g/" + d.groupId + "/t/" + d.threadId;
+      return d.messageId ? base + "?highlight=" + encodeURIComponent(d.messageId) : base;
+    }
+    if (d.threadId) return "/?thread=" + d.threadId;
+    return "/";
+  }
+
+  var api = {
+    classify: classify,
+    shellKey: shellKey,
+    isCacheableShell: isCacheableShell,
+    notificationUrl: notificationUrl,
+  };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.swRoutes = api;
 })(typeof self !== "undefined" ? self : globalThis);

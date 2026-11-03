@@ -274,11 +274,7 @@ self.addEventListener("pushsubscriptionchange", (event) => {
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  const threadId = event.notification.data && event.notification.data.threadId;
-  const groupId = event.notification.data && event.notification.data.groupId;
-  let url = "/";
-  if (threadId && groupId) url = `/g/${groupId}/t/${threadId}`;
-  else if (threadId) url = `/?thread=${threadId}`;
+  const url = self.swRoutes.notificationUrl(event.notification.data);
 
   event.waitUntil(
     (async () => {
