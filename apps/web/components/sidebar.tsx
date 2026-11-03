@@ -8,6 +8,7 @@ import { navigate } from "@/lib/shell-route";
 import { Avatar } from "./avatar";
 import { useMobileSidebar } from "@/lib/mobile-sidebar-context";
 import { setLastSeen } from "@/lib/unread-context";
+import { usePendingSmeters } from "@/lib/use-pending-smeters";
 import { trpc } from "@/lib/trpc/client";
 import { createClient, setRealtimeAuth } from "@/lib/supabase/client";
 import { onResubscribe } from "@/lib/on-resubscribe";
@@ -210,6 +211,7 @@ function GroupNav({
   onNavigate: () => void;
 }) {
   const utils = trpc.useUtils();
+  const { groups: pendingGroups } = usePendingSmeters();
   const reorder = trpc.groups.reorder.useMutation({
     onError: () => utils.groups.list.invalidate(),
   });
@@ -402,19 +404,34 @@ function GroupNav({
               </span>
               <span className="lowercase truncate">{group.name}</span>
             </span>
-            {(unread[group.id]?.unread ?? 0) > 0 && (
-              <span
-                className="inline-block w-2 h-2 flex-shrink-0"
-                style={{
-                  background:
-                    (unread[group.id]?.urgent ?? 0) > 0
-                      ? "hsl(0 75% 52%)"
-                      : "hsl(0 70% 78%)",
-                  border: `1px solid ${(unread[group.id]?.urgent ?? 0) > 0 ? "hsl(0 65% 38%)" : "hsl(0 50% 62%)"}`,
-                  transform: "rotate(45deg)",
-                }}
-              />
-            )}
+            <span className="flex items-center gap-1.5 flex-shrink-0">
+              {pendingGroups.has(group.id) && (
+                <span
+                  className="font-mono text-[9px] font-semibold leading-none px-1 py-[3px] border"
+                  style={{
+                    background: "var(--pastel-tint)",
+                    borderColor: "var(--pastel-deep)",
+                    color: "var(--pastel-ink)",
+                  }}
+                  title="Obesvarad S-mätare"
+                >
+                  S
+                </span>
+              )}
+              {(unread[group.id]?.unread ?? 0) > 0 && (
+                <span
+                  className="inline-block w-2 h-2 flex-shrink-0"
+                  style={{
+                    background:
+                      (unread[group.id]?.urgent ?? 0) > 0
+                        ? "hsl(0 75% 52%)"
+                        : "hsl(0 70% 78%)",
+                    border: `1px solid ${(unread[group.id]?.urgent ?? 0) > 0 ? "hsl(0 65% 38%)" : "hsl(0 50% 62%)"}`,
+                    transform: "rotate(45deg)",
+                  }}
+                />
+              )}
+            </span>
           </div>
         );
       })}
@@ -464,7 +481,10 @@ export function Sidebar({
     let timer: ReturnType<typeof setTimeout> | null = null;
     const bump = () => {
       if (timer) clearTimeout(timer);
-      timer = setTimeout(() => void utils.groups.unread.invalidate(), 300);
+      timer = setTimeout(() => {
+        void utils.groups.unread.invalidate();
+        void utils.smeters.pending.invalidate();
+      }, 300);
     };
     (async () => {
       const { data } = await supabase.auth.getSession();
