@@ -2,7 +2,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, protectedProcedure } from "../trpc";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { isValidAttachmentUrl, isMentioned, shouldNotify, type NotifLevel } from "@/lib/message-policy";
+import { attachmentPathFromUrl, isValidAttachmentUrl, isMentioned, shouldNotify, type NotifLevel } from "@/lib/message-policy";
 import { postSystemMessage } from "@/lib/system-messages";
 import { chance, formShape, SHINY2_ODDS, SHINY3_ODDS } from "@/lib/blob-evolution";
 import { baseShapeOf } from "@/lib/blob-base";
@@ -614,7 +614,7 @@ export const messagesRouter = router({
 
       const { data: message } = await admin
         .from("messages")
-        .select("id, user_id, thread_id")
+        .select("id, user_id, thread_id, attachments")
         .eq("id", input.messageId)
         .single();
 
@@ -625,11 +625,24 @@ export const messagesRouter = router({
 
       const { error } = await admin
         .from("messages")
-        .update({ is_deleted: true })
+        .update({ is_deleted: true, attachments: [] })
         .eq("id", input.messageId)
         .eq("user_id", profile.id);
 
       if (error) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: error.message });
+
+      // Best effort: anything left behind is removed by the daily attachment sweep.
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+      const paths = ((message.attachments ?? []) as { url?: string }[])
+        .map((a) => (a.url ? attachmentPathFromUrl(a.url, supabaseUrl, profile.id) : null))
+        .filter((p): p is string => p !== null);
+      if (paths.length > 0) {
+        const { error: removeError } = await admin.storage.from("attachments").remove(paths);
+        if (removeError) {
+          console.error("[deleteMessage] attachment remove failed", input.messageId, removeError.message);
+        }
+      }
+
       return { success: true };
     }),
 
