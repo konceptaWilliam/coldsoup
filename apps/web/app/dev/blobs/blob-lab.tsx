@@ -15,6 +15,7 @@ import {
 import { baseShapeOf } from "@/lib/blob-base";
 import { BlobForm } from "@/components/blob-form";
 import { EvolveModal, evolveSpec, rerollSpec, type RevealSpec } from "@/components/evolve-modal";
+import { RerollBannerView } from "@/components/reroll-banner";
 
 const EXPRESSIONS = {
   none: undefined, happy: X.happy, sad: X.sad, mad: X.mad, surprised: X.surprised,
@@ -31,6 +32,7 @@ export function BlobLab() {
   const [seed, setSeed] = useState("11111111-2222-3333-4444-555555555555");
   const [state, setState] = useState<BlobState>({ ...DEFAULT_BLOB, level: 3 });
   const [spec, setSpec] = useState<RevealSpec | null>(null);
+  const [banner, setBanner] = useState<"miss" | "hit" | null>(null);
   const base = baseShapeOf(seed);
   const toggle = (k: "shiny2" | "shiny3") => setState((s) => ({ ...s, [k]: !s[k] }));
   const expression = EXPRESSIONS[expr];
@@ -133,6 +135,14 @@ export function BlobLab() {
         <button className="bg-ink text-surface px-3 py-1.5" onClick={() => setSpec(rerollSpec(seed, EVOLUTION[base][1], "triangle" === EVOLUTION[base][1] ? "sun" : "triangle", true))}>Reroll hit</button>
       </section>
 
+      <section className="flex flex-wrap gap-2 items-center font-mono text-xs">
+        <span className="text-muted">Reroll banner:</span>
+        <button className="border border-border px-3 py-1.5" onClick={() => setBanner("miss")}>Banner → miss</button>
+        <button className="border border-border px-3 py-1.5" onClick={() => setBanner("hit")}>Banner → hit</button>
+        <a className="underline text-muted" href="/g?rerollPreview=hit">in app (hit)</a>
+        <a className="underline text-muted" href="/g?rerollPreview=miss">in app (miss)</a>
+      </section>
+
       <section className="grid grid-cols-5 gap-4">
         {SHAPES.map((s) => (
           <div key={s} className="flex flex-col items-center gap-1 font-mono text-[10px] text-muted">
@@ -145,6 +155,20 @@ export function BlobLab() {
           </div>
         ))}
       </section>
+
+      {banner && (
+        <RerollBannerView
+          userId={seed}
+          look={formLook(base, 3, state)}
+          busy={false}
+          onReroll={() => {
+            const prev = EVOLUTION[base][1];
+            setSpec(rerollSpec(seed, prev, "triangle" === prev ? "sun" : "triangle", banner === "hit"));
+            setBanner(null);
+          }}
+          onDismiss={() => setBanner(null)}
+        />
+      )}
 
       {spec && <EvolveModal spec={spec} onPrimary={() => setSpec(null)} onSecondary={() => setSpec(null)} />}
     </main>

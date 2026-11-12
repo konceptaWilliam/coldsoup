@@ -18,6 +18,7 @@ import { diagnosticFetch } from "@/lib/response-diagnostics";
 import { PresenceProvider } from "@/lib/presence-context";
 import { ThemeProvider } from "@/lib/theme-context";
 import { PwaManager } from "@/components/pwa-manager";
+import { OrientationGuard } from "@/components/orientation-guard";
 import { trimPersistedMessages } from "@/lib/thread-cache";
 import { shouldPersistQuery } from "@/lib/persist-policy";
 
@@ -159,6 +160,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
           <PresenceProvider>
             {children}
             <PwaManager />
+            <OrientationGuard />
           </PresenceProvider>
         </PersistQueryClientProvider>
       </trpc.Provider>

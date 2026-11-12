@@ -1,6 +1,5 @@
 "use client";
 
-import { useState } from "react";
 import { trpc } from "@/lib/trpc/client";
 import {
   EVOLUTION,
@@ -14,7 +13,7 @@ import {
 } from "@/lib/blob-evolution";
 import { baseShapeOf } from "@/lib/blob-base";
 import { BlobForm } from "@/components/blob-form";
-import { EvolveModal, rerollSpec, type RevealSpec } from "@/components/evolve-modal";
+import { useLv3Reroll } from "@/components/use-lv3-reroll";
 
 export function BlobSettings({ userId }: { userId: string }) {
   const utils = trpc.useUtils();
@@ -24,14 +23,7 @@ export function BlobSettings({ userId }: { userId: string }) {
     void utils.profile.blobs.invalidate();
   };
   const setForm = trpc.profile.setBlobForm.useMutation({ onSuccess: refresh });
-  const keep = trpc.profile.keepLv3Shape.useMutation({ onSuccess: refresh });
-  const reroll = trpc.profile.rerollLv3.useMutation({
-    onSuccess: (r) => {
-      refresh();
-      setReveal({ spec: rerollSpec(userId, r.previous, r.shape, r.shiny), shiny: r.shiny });
-    },
-  });
-  const [reveal, setReveal] = useState<{ spec: RevealSpec; shiny: boolean } | null>(null);
+  const { reroll, modal } = useLv3Reroll(userId);
 
   if (!me) return <div className="h-40 bg-border/40 animate-pulse" />;
 
@@ -115,17 +107,7 @@ export function BlobSettings({ userId }: { userId: string }) {
         </div>
       </div>
 
-      {reveal && (
-        <EvolveModal
-          spec={reveal.spec}
-          onPrimary={() => {
-            if (reveal.shiny) setForm.mutate({ form: 3 });
-            else keep.mutate();
-            setReveal(null);
-          }}
-          onSecondary={() => setReveal(null)}
-        />
-      )}
+      {modal}
     </div>
   );
 }

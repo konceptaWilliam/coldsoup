@@ -13,6 +13,7 @@ import { ThreadPane } from "./thread-pane";
 import { ShellStack } from "./shell-stack";
 import { IntroOverlay } from "./intro-overlay";
 import { NotificationNudge } from "./notification-nudge";
+import { RerollBanner } from "./reroll-banner";
 
 export type ShellProfile = {
   id: string;
@@ -106,6 +107,7 @@ export function AppShell({
         </div>
         <IntroOverlay seen={profile.intro_seen} />
         <NotificationNudge />
+        <RerollBanner userId={profile.id} />
         {children}
       </MobileSidebarProvider>
     </UnreadProvider>
