@@ -30,6 +30,7 @@ export type RpsSummary = {
   opponent: RpsPlayer | null;
   result: RpsResult | null; // null while pending
   role: RpsRole; // relative to the viewer
+  seen: boolean; // viewer has watched the finished game (animation plays once per person)
 };
 
 export type RpsDetail = RpsSummary & {
@@ -67,7 +68,7 @@ export function roleOf(viewerId: string, challengerId: string | null, opponentId
 
 // The result is always derived from the two moves, and only once the game is
 // done — a pending game's challenger move must never influence the summary.
-export function summarize(game: RpsGameRow, moves: RpsMoveRow[], viewerId: string): RpsSummary {
+export function summarize(game: RpsGameRow, moves: RpsMoveRow[], viewerId: string, seen = false): RpsSummary {
   const done = game.status === "done";
   return {
     id: game.id,
@@ -78,16 +79,35 @@ export function summarize(game: RpsGameRow, moves: RpsMoveRow[], viewerId: strin
       ? resultOf(moveOf(moves, game.id, game.challenger_id), moveOf(moves, game.id, game.opponent_id))
       : null,
     role: roleOf(viewerId, game.challenger_id, game.opponent_id),
+    seen,
   };
 }
 
-export type RpsCardState = "make_move" | "waiting" | "won" | "lost" | "tie" | "view_results";
+// Each person watches a finished game exactly once ("see_result" /
+// "view_results"); after that the card only states the result.
+export type RpsCardState =
+  | "make_move"
+  | "waiting"
+  | "see_result"
+  | "view_results"
+  | "won"
+  | "lost"
+  | "tie"
+  | "result";
 
 export function cardState(s: RpsSummary): RpsCardState {
   if (s.status === "pending") return s.role === "opponent" ? "make_move" : "waiting";
-  if (s.role === "spectator" || !s.result) return "view_results";
+  if (!s.seen) return s.role === "spectator" ? "view_results" : "see_result";
+  if (s.role === "spectator" || !s.result) return "result";
   if (s.result === "tie") return "tie";
   return s.result === s.role ? "won" : "lost";
+}
+
+// Whether tapping the card opens the game. A finished game the viewer already
+// watched stays closed — no replays — except a tie, for the Rematch button.
+export function canOpen(s: RpsSummary): boolean {
+  const state = cardState(s);
+  return state !== "waiting" && state !== "won" && state !== "lost" && state !== "result";
 }
 
 export function bannerText(s: Pick<RpsSummary, "result" | "challenger" | "opponent">): string {

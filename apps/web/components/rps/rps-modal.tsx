@@ -1,15 +1,25 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { trpc } from "@/lib/trpc/client";
 import { bannerText, canRematch, rematchOpponentId, type RpsDetail, type RpsMove } from "@/lib/rps";
 import { RpsBattle } from "./rps-battle";
 import { RpsPicker } from "./rps-picker";
 import { RpsButton, RpsSheet, RpsWaiting } from "./rps-sheet";
 
-export function RpsModal({ gameId, threadId, onClose }: { gameId: string; threadId: string; onClose: () => void }) {
+export function RpsModal({
+  gameId,
+  threadId,
+  onSeen,
+  onClose,
+}: {
+  gameId: string;
+  threadId: string;
+  onSeen?: () => void;
+  onClose: () => void;
+}) {
   const utils = trpc.useUtils();
-  const { data, isLoading, error } = trpc.rps.get.useQuery({ gameId });
+  const { data, isLoading, error } = trpc.rps.get.useQuery({ gameId }, { staleTime: Infinity });
   const [mode, setMode] = useState<"view" | "rematch" | "rematch_sent">("view");
   const [playError, setPlayError] = useState<string | null>(null);
   const [rematchError, setRematchError] = useState<string | null>(null);
@@ -21,6 +31,7 @@ export function RpsModal({ gameId, threadId, onClose }: { gameId: string; thread
       else setPlayError("You can't play this game anymore.");
     },
   });
+  const markSeen = trpc.rps.markSeen.useMutation();
   const rematch = trpc.rps.create.useMutation({
     onSuccess: () => setMode("rematch_sent"),
     onError: (e) =>
@@ -29,8 +40,30 @@ export function RpsModal({ gameId, threadId, onClose }: { gameId: string; thread
       ),
   });
 
+  // The one and only viewing: as soon as an unwatched finished game is shown,
+  // record it. The cached detail keeps seen=false, so the animation still
+  // finishes in this modal; the next open shows the result only.
+  const firstViewing = data?.status === "done" && !data.seen;
+  const viewed = useRef(false);
+  const mark = markSeen.mutate;
+  useEffect(() => {
+    if (!firstViewing || viewed.current) return;
+    viewed.current = true;
+    mark({ gameId });
+    onSeen?.();
+    // onSeen is a fresh closure each render; run once per game.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [firstViewing, gameId, mark]);
+
+  // On close, flip the cached copy too — reopening a tie (for Rematch) must
+  // show the result only, not the animation again.
+  function close() {
+    if (viewed.current) utils.rps.get.setData({ gameId }, (d) => (d ? { ...d, seen: true } : d));
+    onClose();
+  }
+
   return (
-    <RpsSheet title="Rock, paper, scissors" onClose={onClose}>
+    <RpsSheet title="Rock, paper, scissors" onClose={close}>
       {isLoading ? (
         <p className="font-mono text-sm text-neutral-600 py-12 text-center">Loading…</p>
       ) : error || !data ? (
@@ -49,7 +82,7 @@ export function RpsModal({ gameId, threadId, onClose }: { gameId: string; thread
             const opponentId = rematchOpponentId(data);
             if (opponentId) rematch.mutate({ threadId, opponentId, move, rematchOf: data.id });
           }}
-          onClose={onClose}
+          onClose={close}
         />
       )}
     </RpsSheet>
@@ -120,21 +153,22 @@ function GameBody({
   return (
     <div className="space-y-4">
       {cm && om ? (
+        // Already watched (only reachable for a tie, to rematch): result only.
         <RpsBattle
           left={{ name: challenger, move: cm }}
           right={{ name: opponent, move: om }}
           banner={bannerText(game)}
+          startAt={game.seen ? "result" : "shake"}
+          frozen={game.seen}
         />
       ) : (
         <p className="font-mono text-sm text-neutral-600 py-8 text-center">{bannerText(game)}</p>
       )}
-      <div className="grid gap-2">
-        {canRematch(game) && (
-          <RpsButton onClick={onStartRematch} color="#FDE047">
-            Rematch →
-          </RpsButton>
-        )}
-      </div>
+      {canRematch(game) && (
+        <RpsButton onClick={onStartRematch} color="#FDE047">
+          Rematch →
+        </RpsButton>
+      )}
     </div>
   );
 }

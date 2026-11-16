@@ -11,15 +11,17 @@ import { PaperHand, RockHand, ScissorsHand } from "@/components/rps/hands";
 
 const ANNA = { id: "a", display_name: "Anna", avatar_url: null };
 const BO = { id: "b", display_name: "Bo", avatar_url: null };
-const base: RpsSummary = { id: "g", status: "pending", challenger: ANNA, opponent: BO, result: null, role: "spectator" };
+const base: RpsSummary = { id: "g", status: "pending", challenger: ANNA, opponent: BO, result: null, role: "spectator", seen: false };
 
 const CARDS: { label: string; rps: RpsSummary }[] = [
   { label: "Opponent, pending", rps: { ...base, role: "opponent" } },
   { label: "Challenger / spectator, pending", rps: { ...base, role: "challenger" } },
-  { label: "Player, won", rps: { ...base, status: "done", result: "challenger", role: "challenger" } },
-  { label: "Player, lost", rps: { ...base, status: "done", result: "challenger", role: "opponent" } },
-  { label: "Player, tie", rps: { ...base, status: "done", result: "tie", role: "opponent" } },
-  { label: "Spectator, done", rps: { ...base, status: "done", result: "opponent", role: "spectator" } },
+  { label: "Player, done, not watched yet", rps: { ...base, status: "done", result: "challenger", role: "challenger" } },
+  { label: "Spectator, done, not watched yet", rps: { ...base, status: "done", result: "opponent", role: "spectator" } },
+  { label: "Player, won (watched — not clickable)", rps: { ...base, status: "done", result: "challenger", role: "challenger", seen: true } },
+  { label: "Player, lost (watched — not clickable)", rps: { ...base, status: "done", result: "challenger", role: "opponent", seen: true } },
+  { label: "Player, tie (watched — opens for rematch)", rps: { ...base, status: "done", result: "tie", role: "opponent", seen: true } },
+  { label: "Spectator (watched — not clickable)", rps: { ...base, status: "done", result: "opponent", role: "spectator", seen: true } },
 ];
 
 const MEMBERS = [

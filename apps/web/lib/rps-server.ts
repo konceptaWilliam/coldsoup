@@ -23,15 +23,17 @@ export async function loadRpsSummaries(
 ): Promise<Map<string, RpsSummary>> {
   const map = new Map<string, RpsSummary>();
   if (gameIds.length === 0) return map;
-  const [{ data: games }, { data: moves }] = await Promise.all([
+  const [{ data: games }, { data: moves }, { data: views }] = await Promise.all([
     admin.from("rps_games").select(RPS_GAME_COLUMNS).in("id", gameIds),
     admin.from("rps_moves").select("game_id, user_id, move").in("game_id", gameIds),
+    admin.from("rps_views").select("game_id").eq("user_id", viewerId).in("game_id", gameIds),
   ]);
+  const seen = new Set((views ?? []).map((v) => v.game_id as string));
   for (const raw of games ?? []) {
     const g = raw as unknown as RpsGameRecord;
     const groupId = g.threads?.group_id;
     if (allowedGroups && (!groupId || !allowedGroups.has(groupId))) continue;
-    map.set(g.id, summarize(g, (moves ?? []) as RpsMoveRow[], viewerId));
+    map.set(g.id, summarize(g, (moves ?? []) as RpsMoveRow[], viewerId, seen.has(g.id)));
   }
   return map;
 }

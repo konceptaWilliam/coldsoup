@@ -35,21 +35,22 @@ async function isGroupMember(admin: Admin, groupId: string, userId: string): Pro
 // One game + its moves, after checking the caller belongs to the game's group.
 // Not found and not a member both surface as NOT_FOUND (no existence leak).
 async function loadGame(admin: Admin, gameId: string, viewerId: string) {
-  const [{ data: raw }, { data: moves }] = await Promise.all([
+  const [{ data: raw }, { data: moves }, { data: view }] = await Promise.all([
     admin.from("rps_games").select(RPS_GAME_COLUMNS).eq("id", gameId).maybeSingle(),
     admin.from("rps_moves").select("game_id, user_id, move").eq("game_id", gameId),
+    admin.from("rps_views").select("game_id").eq("game_id", gameId).eq("user_id", viewerId).maybeSingle(),
   ]);
   const game = raw as unknown as RpsGameRecord | null;
   const groupId = game?.threads?.group_id;
   if (!game || !groupId || !(await isGroupMember(admin, groupId, viewerId))) {
     throw new TRPCError({ code: "NOT_FOUND" });
   }
-  return { game, moves: (moves ?? []) as RpsMoveRow[], groupId };
+  return { game, moves: (moves ?? []) as RpsMoveRow[], groupId, seen: !!view };
 }
 
 // Summary + moves. While pending, only the viewer's own move is revealed.
-function detail(game: RpsGameRecord, moves: RpsMoveRow[], viewerId: string): RpsDetail {
-  const s = summarize(game, moves, viewerId);
+function detail(game: RpsGameRecord, moves: RpsMoveRow[], viewerId: string, seen: boolean): RpsDetail {
+  const s = summarize(game, moves, viewerId, seen);
   const done = s.status === "done";
   return {
     ...s,
@@ -231,16 +232,34 @@ export const rpsRouter = router({
         );
       }
 
+      // The opponent watches the battle right after moving — that's their one view.
+      await admin.from("rps_views").upsert({ game_id: game.id, user_id: profile.id }, { ignoreDuplicates: true });
+
       const allMoves: RpsMoveRow[] = [...moves, { game_id: game.id, user_id: profile.id, move: input.move }];
-      return detail({ ...game, status: "done" }, allMoves, profile.id);
+      // seen=false here so this response still plays the animation once.
+      return detail({ ...game, status: "done" }, allMoves, profile.id, false);
     }),
 
   get: protectedProcedure
     .input(z.object({ gameId: z.string().uuid() }))
     .query(async ({ ctx, input }): Promise<RpsDetail> => {
       const admin = createAdminClient();
-      const { game, moves } = await loadGame(admin, input.gameId, ctx.profile.id);
-      return detail(game, moves, ctx.profile.id);
+      const { game, moves, seen } = await loadGame(admin, input.gameId, ctx.profile.id);
+      return detail(game, moves, ctx.profile.id, seen);
+    }),
+
+  // Record that the caller has watched a finished game. Called when the
+  // battle animation starts; from then on the card shows the result only.
+  markSeen: protectedProcedure
+    .input(z.object({ gameId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const admin = createAdminClient();
+      const { game } = await loadGame(admin, input.gameId, ctx.profile.id);
+      if (game.status !== "done") throw new TRPCError({ code: "BAD_REQUEST", message: "Game not finished" });
+      await admin
+        .from("rps_views")
+        .upsert({ game_id: game.id, user_id: ctx.profile.id }, { ignoreDuplicates: true });
+      return { ok: true };
     }),
 
   // Card summaries (no moves) for realtime-inserted messages and live refresh.

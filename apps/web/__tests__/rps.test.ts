@@ -10,6 +10,7 @@ import {
   bannerText,
   canRematch,
   rematchOpponentId,
+  canOpen,
   type RpsGameRow,
   type RpsMoveRow,
   type RpsSummary,
@@ -27,7 +28,7 @@ function moves(a: string, b?: string): RpsMoveRow[] {
   return out;
 }
 function summary(over: Partial<RpsSummary>): RpsSummary {
-  return { id: "g1", status: "done", challenger: A, opponent: B, result: "tie", role: "spectator", ...over };
+  return { id: "g1", status: "done", challenger: A, opponent: B, result: "tie", role: "spectator", seen: true, ...over };
 }
 
 test("compareMoves: all nine pairs", () => {
@@ -79,16 +80,39 @@ test("summarize: ignores moves from other games", () => {
   assert.equal(summarize(game("done"), [...moves("rock"), ...other], "a").result, null);
 });
 
-test("cardState", () => {
-  assert.equal(cardState(summary({ status: "pending", result: null, role: "opponent" })), "make_move");
-  assert.equal(cardState(summary({ status: "pending", result: null, role: "challenger" })), "waiting");
-  assert.equal(cardState(summary({ status: "pending", result: null, role: "spectator" })), "waiting");
+test("cardState: pending", () => {
+  assert.equal(cardState(summary({ status: "pending", result: null, role: "opponent", seen: false })), "make_move");
+  assert.equal(cardState(summary({ status: "pending", result: null, role: "challenger", seen: false })), "waiting");
+  assert.equal(cardState(summary({ status: "pending", result: null, role: "spectator", seen: false })), "waiting");
+});
+
+test("cardState: done but not yet watched", () => {
+  assert.equal(cardState(summary({ result: "challenger", role: "challenger", seen: false })), "see_result");
+  assert.equal(cardState(summary({ result: "tie", role: "opponent", seen: false })), "see_result");
+  assert.equal(cardState(summary({ result: "opponent", role: "spectator", seen: false })), "view_results");
+});
+
+test("cardState: watched once, result only", () => {
   assert.equal(cardState(summary({ result: "challenger", role: "challenger" })), "won");
   assert.equal(cardState(summary({ result: "challenger", role: "opponent" })), "lost");
   assert.equal(cardState(summary({ result: "opponent", role: "opponent" })), "won");
   assert.equal(cardState(summary({ result: "tie", role: "challenger" })), "tie");
-  assert.equal(cardState(summary({ result: "challenger", role: "spectator" })), "view_results");
-  assert.equal(cardState(summary({ result: null, role: "challenger" })), "view_results");
+  assert.equal(cardState(summary({ result: "challenger", role: "spectator" })), "result");
+  assert.equal(cardState(summary({ result: null, role: "challenger" })), "result");
+});
+
+test("canOpen: no way back into a finished, watched game except a tie rematch", () => {
+  assert.equal(canOpen(summary({ status: "pending", result: null, role: "opponent", seen: false })), true);
+  assert.equal(canOpen(summary({ result: "challenger", role: "spectator", seen: false })), true);
+  assert.equal(canOpen(summary({ result: "challenger", role: "challenger" })), false);
+  assert.equal(canOpen(summary({ result: "challenger", role: "spectator" })), false);
+  assert.equal(canOpen(summary({ result: "tie", role: "opponent" })), true);
+  assert.equal(canOpen(summary({ result: "tie", role: "spectator" })), false);
+});
+
+test("summarize: seen flag", () => {
+  assert.equal(summarize(game("done"), moves("rock", "paper"), "c").seen, false);
+  assert.equal(summarize(game("done"), moves("rock", "paper"), "c", true).seen, true);
 });
 
 test("bannerText", () => {
