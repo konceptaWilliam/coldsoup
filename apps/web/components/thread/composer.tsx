@@ -107,6 +107,7 @@ export type ComposerProps = {
   onGaze: (active: boolean) => void;
   onEditLastOwn: () => boolean;
   onOpenSmeter: () => void;
+  onOpenRps: () => void;
   onReopen: () => void;
   overlay: ReactNode;
   footer: ReactNode;
@@ -125,6 +126,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     onGaze,
     onEditLastOwn,
     onOpenSmeter,
+    onOpenRps,
     onReopen,
     overlay,
     footer,
@@ -559,7 +561,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
               type="button"
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => setAttachMenuOpen((o) => !o)}
-              title="Attach or create S-meter"
+              title="Attach, S-meter or game"
               className="h-11 w-11 md:h-10 md:w-10 flex items-center justify-center text-muted hover:text-pastel-ink transition-colors font-mono text-lg leading-none"
             >
               +
@@ -581,13 +583,22 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                     Attach a file
                   </button>
                   <button
-                    className="w-full text-left px-3 py-2 font-mono text-[12px] text-ink hover:bg-surface-2"
+                    className="w-full text-left px-3 py-2 font-mono text-[12px] text-ink hover:bg-surface-2 border-b border-border"
                     onClick={() => {
                       setAttachMenuOpen(false);
                       onOpenSmeter();
                     }}
                   >
                     Create an S-meter
+                  </button>
+                  <button
+                    className="w-full text-left px-3 py-2 font-mono text-[12px] text-ink hover:bg-surface-2"
+                    onClick={() => {
+                      setAttachMenuOpen(false);
+                      onOpenRps();
+                    }}
+                  >
+                    Rock, paper, scissors..
                   </button>
                 </div>
               </>

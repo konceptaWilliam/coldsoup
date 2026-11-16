@@ -4,6 +4,7 @@ import { memo, useMemo } from "react";
 import type { Expression } from "blobatar";
 import { Avatar } from "@/components/avatar";
 import { SMeterCard } from "@/components/smeter";
+import { RpsCard } from "@/components/rps/rps-card";
 import { localPreview } from "@/lib/local-previews";
 import { aspectStyle } from "@/lib/media";
 import type { MentionMatcher } from "@/lib/mentions";
@@ -315,6 +316,9 @@ function Row({
                 )}
                 {msg.smeter && (
                   <SMeterCard smeter={msg.smeter} threadId={threadId} />
+                )}
+                {msg.rps && (
+                  <RpsCard rps={msg.rps} threadId={threadId} />
                 )}
                 {msg.body && (
                   <p className="text-[16px] leading-[1.5] text-ink whitespace-pre-wrap break-words">

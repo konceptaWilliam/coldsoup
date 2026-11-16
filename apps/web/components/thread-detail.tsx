@@ -19,6 +19,8 @@ import { useOnline } from "@/lib/presence-context";
 import { haptic } from "@/lib/haptics";
 import { playSend, playReceive } from "@/lib/sound";
 import { SMeterCreateModal, type SMeterSummary } from "@/components/smeter";
+import { RpsCreateModal } from "@/components/rps/rps-create-modal";
+import type { RpsSummary } from "@/lib/rps";
 import { useBlob } from "@/lib/use-blob";
 import { BlobLevel } from "@/components/blob-level";
 import { EvolveModal, evolveSpec, type RevealSpec } from "@/components/evolve-modal";
@@ -1123,6 +1125,7 @@ export function ThreadDetail({
   const [activeTooltip, setActiveTooltip] = useState<string | null>(null);
   const tooltipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [showSMeterCreate, setShowSMeterCreate] = useState(false);
+  const [showRpsCreate, setShowRpsCreate] = useState(false);
   const [profileTarget, setProfileTarget] = useState<ProfileTarget | null>(null);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [activeMessageMenuId, setActiveMessageMenuId] = useState<string | null>(null);
@@ -1367,6 +1370,27 @@ export function ThreadDetail({
         reactions: REACTION_DEFAULTS.map((r) => ({ ...r })),
       });
       setShowSMeterCreate(false);
+    },
+    onError: () => {
+      forceScrollOnNextMessageRef.current = false;
+    },
+  });
+
+  const createRps = trpc.rps.create.useMutation({
+    onSuccess: async (msg) => {
+      haptic("light");
+      const rpsId = (msg as unknown as { rps_id: string | null }).rps_id ?? null;
+      let rps: RpsSummary | null = null;
+      if (rpsId) {
+        const map = await utils.rps.getMany.fetch({ gameIds: [rpsId] }, { staleTime: 0 });
+        rps = map[rpsId] ?? null;
+      }
+      thread.addServerMessage({
+        ...(msg as unknown as Message),
+        rps_id: rpsId,
+        rps,
+        reactions: REACTION_DEFAULTS.map((r) => ({ ...r })),
+      });
     },
     onError: () => {
       forceScrollOnNextMessageRef.current = false;
@@ -1857,6 +1881,7 @@ export function ThreadDetail({
     },
     onEditLastOwn: editLastOwn,
     onOpenSmeter: () => setShowSMeterCreate(true),
+    onOpenRps: () => setShowRpsCreate(true),
     onReopen: () => {
       setThreadStatus("OPEN");
       reopenFromBanner.mutate({ threadId, status: "OPEN" });
@@ -2214,6 +2239,20 @@ export function ThreadDetail({
         />
       )}
 
+      {/* Rock, paper, scissors create modal */}
+      {showRpsCreate && (
+        <RpsCreateModal
+          members={members}
+          meId={me.id}
+          onSubmit={(opponentId, move) => {
+            forceScrollOnNextMessageRef.current = true;
+            scrollToBottom("smooth");
+            return createRps.mutateAsync({ threadId, opponentId, move });
+          }}
+          onClose={() => setShowRpsCreate(false)}
+        />
+      )}
+
       {/* Tap → zoomable fullscreen image */}
       {activeLightbox && (
         <ImageLightbox
@@ -2400,6 +2439,7 @@ export function ThreadDetail({
         onGaze={composerActions.onGaze}
         onEditLastOwn={composerActions.onEditLastOwn}
         onOpenSmeter={composerActions.onOpenSmeter}
+        onOpenRps={composerActions.onOpenRps}
         onReopen={composerActions.onReopen}
         overlay={
           hasNewMessages ? (
