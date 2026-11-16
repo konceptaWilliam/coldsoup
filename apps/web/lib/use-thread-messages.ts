@@ -16,6 +16,7 @@ import {
   patchMessage,
   patchPoll,
   patchSmeter,
+  patchRps,
   upsertMessage,
   type DispatchStatus,
   type ThreadPage,
@@ -23,6 +24,7 @@ import {
 } from "./thread-cache";
 import { REACTION_DEFAULTS, type Attachment, type Me, type Message, type ReplyTo } from "./thread-types";
 import { readOutbox, writeOutbox, type OutboxEntry } from "./outbox";
+import type { RpsSummary } from "./rps";
 import { AttachmentTooLargeError, uploadAttachments } from "./upload-attachments";
 import { registerLocalPreview, releaseLocalPreviews } from "./local-previews";
 
@@ -438,6 +440,16 @@ export function useThreadMessages({
     [utils, setData],
   );
 
+  const refreshRps = useCallback(
+    async (gameId: string) => {
+      try {
+        const map = await utils.rps.getMany.fetch({ gameIds: [gameId] }, { staleTime: 0 });
+        if (map[gameId]) setData((d) => patchRps(d, gameId, map[gameId] as RpsSummary));
+      } catch {}
+    },
+    [utils, setData],
+  );
+
   const hasSubscribedRef = useRef(false);
   useEffect(() => {
     const supabase = createClient();
@@ -484,6 +496,11 @@ export function useThreadMessages({
               const map = await utils.smeters.getMany.fetch({ smeterIds: [row.smeter_id] }, { staleTime: 0 });
               smeter = (map[row.smeter_id] as SMeterSummary | undefined) ?? null;
             }
+            let rps: RpsSummary | null = null;
+            if (row.rps_id) {
+              const map = await utils.rps.getMany.fetch({ gameIds: [row.rps_id] }, { staleTime: 0 });
+              rps = map[row.rps_id] ?? null;
+            }
 
             // Reply quote from the cache when the target is loaded.
             let reply_to: ReplyTo | null = null;
@@ -507,6 +524,7 @@ export function useThreadMessages({
               is_deleted: row.is_deleted ?? false,
               poll,
               smeter,
+              rps,
               system_event: (row.system_event ?? null) as SystemEvent | null,
               profiles: profile,
               reply_to,
@@ -569,6 +587,14 @@ export function useThreadMessages({
         })
         .on(
           "postgres_changes",
+          { event: "UPDATE", schema: "public", table: "rps_games", filter: `thread_id=eq.${threadId}` },
+          (payload) => {
+            const id = (payload.new as { id?: string } | null)?.id;
+            if (id && flatten(getData()).some((m) => m.rps_id === id)) void refreshRps(id);
+          },
+        )
+        .on(
+          "postgres_changes",
           { event: "*", schema: "public", table: "thread_reads", filter: `thread_id=eq.${threadId}` },
           () => void utils.threads.reads.invalidate({ threadId }),
         )
@@ -626,7 +652,7 @@ export function useThreadMessages({
       timers.forEach((t) => clearTimeout(t));
       timers.clear();
     };
-  }, [threadId, utils, setData, getData, backfill, refreshPoll, refreshSmeter]);
+  }, [threadId, utils, setData, getData, backfill, refreshPoll, refreshSmeter, refreshRps]);
 
   // ---- optimistic mutations ---------------------------------------------------
 
