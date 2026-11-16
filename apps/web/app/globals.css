@@ -311,3 +311,24 @@ body {
   .evo-shiny.evo-in { animation: none; opacity: 1; }
   .evo-text { animation: none; opacity: 1; }
 }
+
+/* Rock, paper, scissors */
+@keyframes rps-shake {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-24px); }
+}
+@keyframes rps-pop {
+  0% { transform: scale(0.6); opacity: 0; }
+  70% { transform: scale(1.08); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+@keyframes rps-idle {
+  0%, 100% { transform: rotate(-8deg); }
+  50% { transform: rotate(8deg); }
+}
+.rps-shake { animation: rps-shake 500ms ease-in-out; }
+.rps-pop { animation: rps-pop 350ms ease-out both; }
+.rps-idle { animation: rps-idle 1.6s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .rps-shake, .rps-pop, .rps-idle { animation: none; }
+}
