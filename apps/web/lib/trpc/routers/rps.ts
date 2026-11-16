@@ -109,14 +109,20 @@ export const rpsRouter = router({
       }
 
       if (input.rematchOf) {
-        const [{ data: prev }, { data: prevMoves }] = await Promise.all([
+        const [{ data: prev }, { data: prevMoves }, { data: existing }] = await Promise.all([
           admin
             .from("rps_games")
             .select("id, thread_id, status, challenger_id, opponent_id")
             .eq("id", input.rematchOf)
             .maybeSingle(),
           admin.from("rps_moves").select("game_id, user_id, move").eq("game_id", input.rematchOf),
+          admin.from("rps_games").select("id").eq("rematch_of", input.rematchOf).limit(1),
         ]);
+        // One rematch per tie: if the other player already started it, don't
+        // spawn a second game.
+        if (existing && existing.length > 0) {
+          throw new TRPCError({ code: "CONFLICT", message: "Rematch already started" });
+        }
         const players = prev ? [prev.challenger_id as string | null, prev.opponent_id as string | null] : [];
         const tie =
           !!prev &&

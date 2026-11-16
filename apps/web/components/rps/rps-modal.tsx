@@ -10,9 +10,9 @@ import { RpsButton, RpsSheet, RpsWaiting } from "./rps-sheet";
 export function RpsModal({ gameId, threadId, onClose }: { gameId: string; threadId: string; onClose: () => void }) {
   const utils = trpc.useUtils();
   const { data, isLoading, error } = trpc.rps.get.useQuery({ gameId });
-  const [replay, setReplay] = useState(0);
   const [mode, setMode] = useState<"view" | "rematch" | "rematch_sent">("view");
   const [playError, setPlayError] = useState<string | null>(null);
+  const [rematchError, setRematchError] = useState<string | null>(null);
 
   const play = trpc.rps.play.useMutation({
     onSuccess: (d) => utils.rps.get.setData({ gameId }, d),
@@ -21,7 +21,13 @@ export function RpsModal({ gameId, threadId, onClose }: { gameId: string; thread
       else setPlayError("You can't play this game anymore.");
     },
   });
-  const rematch = trpc.rps.create.useMutation({ onSuccess: () => setMode("rematch_sent") });
+  const rematch = trpc.rps.create.useMutation({
+    onSuccess: () => setMode("rematch_sent"),
+    onError: (e) =>
+      setRematchError(
+        e.data?.code === "CONFLICT" ? "A rematch has already been started — check the thread." : "Couldn't start the rematch.",
+      ),
+  });
 
   return (
     <RpsSheet title="Rock, paper, scissors" onClose={onClose}>
@@ -32,13 +38,12 @@ export function RpsModal({ gameId, threadId, onClose }: { gameId: string; thread
       ) : (
         <GameBody
           game={data}
-          replay={replay}
           mode={mode}
           playPending={play.isPending}
           playError={playError}
           rematchPending={rematch.isPending}
+          rematchError={rematchError}
           onPlay={(move) => play.mutate({ gameId, move })}
-          onReplay={() => setReplay((n) => n + 1)}
           onStartRematch={() => setMode("rematch")}
           onRematch={(move) => {
             const opponentId = rematchOpponentId(data);
@@ -53,25 +58,23 @@ export function RpsModal({ gameId, threadId, onClose }: { gameId: string; thread
 
 function GameBody({
   game,
-  replay,
   mode,
   playPending,
   playError,
   rematchPending,
+  rematchError,
   onPlay,
-  onReplay,
   onStartRematch,
   onRematch,
   onClose,
 }: {
   game: RpsDetail;
-  replay: number;
   mode: "view" | "rematch" | "rematch_sent";
   playPending: boolean;
   playError: string | null;
   rematchPending: boolean;
+  rematchError: string | null;
   onPlay: (move: RpsMove) => void;
-  onReplay: () => void;
   onStartRematch: () => void;
   onRematch: (move: RpsMove) => void;
   onClose: () => void;
@@ -81,7 +84,12 @@ function GameBody({
   const rival = game.role === "challenger" ? opponent : challenger;
 
   if (mode === "rematch") {
-    return <RpsPicker onPick={onRematch} disabled={rematchPending} prompt={`Rematch against ${rival}`} />;
+    return (
+      <>
+        <RpsPicker onPick={onRematch} disabled={rematchPending} prompt={`Rematch against ${rival}`} />
+        {rematchError && <p className="mt-3 font-mono text-[12px] font-bold text-red-600">{rematchError}</p>}
+      </>
+    );
   }
   if (mode === "rematch_sent") {
     return (
@@ -113,7 +121,6 @@ function GameBody({
     <div className="space-y-4">
       {cm && om ? (
         <RpsBattle
-          key={replay}
           left={{ name: challenger, move: cm }}
           right={{ name: opponent, move: om }}
           banner={bannerText(game)}
@@ -127,7 +134,6 @@ function GameBody({
             Rematch →
           </RpsButton>
         )}
-        {cm && om && <RpsButton onClick={onReplay}>Replay</RpsButton>}
       </div>
     </div>
   );

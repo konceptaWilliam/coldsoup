@@ -12,9 +12,9 @@ function bar(state: RpsCardState, opponent: string): { text: string; color: stri
     case "waiting":
       return { text: `Waiting for ${opponent}…`, color: "#E5E5E5" };
     case "won":
-      return { text: "You won! · Replay →", color: "#4ADE80" };
+      return { text: "You won!", color: "#4ADE80" };
     case "lost":
-      return { text: "You lost · Replay →", color: "#E5E5E5" };
+      return { text: "You lost", color: "#E5E5E5" };
     case "tie":
       return { text: "Tie! · Rematch →", color: "#FDE047" };
     case "view_results":
