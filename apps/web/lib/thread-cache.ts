@@ -13,6 +13,8 @@ export type CacheMessage = {
   poll: { id: string; options: { id: string }[] } | null;
   smeter_id: string | null;
   smeter: unknown;
+  rps_id?: string | null;
+  rps?: unknown;
   delivery_status?: "sending" | "failed";
 };
 
@@ -131,6 +133,10 @@ export function patchPoll<M extends CacheMessage>(data: ThreadPages<M>, pollId: 
 
 export function patchSmeter<M extends CacheMessage>(data: ThreadPages<M>, smeterId: string, smeter: M["smeter"]): ThreadPages<M> {
   return mapWhere(data, (m) => m.smeter_id === smeterId, (m) => ({ ...m, smeter }));
+}
+
+export function patchRps<M extends CacheMessage>(data: ThreadPages<M>, gameId: string, rps: M["rps"]): ThreadPages<M> {
+  return mapWhere(data, (m) => m.rps_id === gameId, (m) => ({ ...m, rps }));
 }
 
 export function findPollIdByOption<M extends CacheMessage>(data: ThreadPages<M> | undefined, optionId: string): string | null {

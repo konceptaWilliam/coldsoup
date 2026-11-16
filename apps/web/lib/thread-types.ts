@@ -1,5 +1,6 @@
 import type { SMeterSummary } from "@/components/smeter";
 import type { SystemEvent } from "@/lib/system-event";
+import type { RpsSummary } from "@/lib/rps";
 
 export type ThreadStatus = "OPEN" | "URGENT" | "DONE";
 
@@ -71,6 +72,8 @@ export type Message = {
   poll: PollData | null;
   smeter_id: string | null;
   smeter: SMeterSummary | null;
+  rps_id?: string | null;
+  rps?: RpsSummary | null;
   system_event: SystemEvent | null;
   attachments: Attachment[];
   reactions: Reaction[];

@@ -12,6 +12,7 @@ import { useUnread, getLastSeen, setLastSeen } from "@/lib/unread-context";
 import { usePendingSmeters } from "@/lib/use-pending-smeters";
 import { useMobileSidebar } from "@/lib/mobile-sidebar-context";
 import { onResubscribe } from "@/lib/on-resubscribe";
+import { RPS_PREVIEW } from "@/lib/rps";
 
 // Loaded on first open — keeps these (and the calendar event dialog) out of
 // the first-load bundle.
@@ -35,6 +36,7 @@ type Thread = {
     attachments?: Array<{ type: string; name?: string }> | null;
     poll_id?: string | null;
     smeter_id?: string | null;
+    rps_id?: string | null;
     smeters?: { title: string | null } | null;
     is_deleted?: boolean;
     created_at: string;
@@ -52,6 +54,7 @@ function lastMessagePreview(m: NonNullable<Thread["messages"]>[number]): {
   const body = (m.body ?? "").trim();
   if (body) return { text: body, media: false };
   if (m.smeter_id) return { text: m.smeters?.title ? `S-meter: ${m.smeters.title}` : "S-meter", media: true };
+  if (m.rps_id) return { text: RPS_PREVIEW, media: true };
   if (m.poll_id) return { text: "Poll", media: true };
   const att = m.attachments?.[0];
   if (att) {
