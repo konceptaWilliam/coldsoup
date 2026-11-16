@@ -2,7 +2,6 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, protectedProcedure } from "../trpc";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { assertThreadAccess } from "../thread-access";
 import { accessibleByGroup } from "@/lib/server-shapes";
 
 type VoterInfo = { id: string; display_name: string; avatar_url: string | null };
@@ -65,46 +64,6 @@ export const pollsRouter = router({
         result[poll.id as string] = { id: poll.id as string, question: poll.question as string, options };
       }
       return result;
-    }),
-
-  create: protectedProcedure
-    .input(
-      z.object({
-        threadId: z.string().uuid(),
-        question: z.string().min(1).max(500),
-        options: z.array(z.string().min(1).max(200)).max(20).default([]),
-      })
-    )
-    .mutation(async ({ ctx, input }) => {
-      const { profile } = ctx;
-      const admin = createAdminClient();
-
-      await assertThreadAccess(admin, input.threadId, profile.id);
-
-      const { data: poll, error: pollErr } = await admin
-        .from("polls")
-        .insert({ thread_id: input.threadId, question: input.question, created_by: profile.id })
-        .select("id")
-        .single();
-      if (pollErr || !poll) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-
-      if (input.options.length > 0) {
-        await admin.from("poll_options").insert(
-          input.options.filter(Boolean).map((text) => ({ poll_id: poll.id, text, created_by: profile.id }))
-        );
-      }
-
-      const [{ data: message, error: msgErr }] = await Promise.all([
-        admin
-          .from("messages")
-          .insert({ thread_id: input.threadId, user_id: profile.id, body: "", poll_id: poll.id })
-          .select("id, body, created_at, edited_at, is_deleted, thread_id, user_id, attachments, reply_to_id, poll_id, profiles(id, display_name, avatar_url)")
-          .single(),
-        admin.from("threads").update({ updated_at: new Date().toISOString() }).eq("id", input.threadId),
-      ]);
-      if (msgErr || !message) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-
-      return message;
     }),
 
   addOption: protectedProcedure

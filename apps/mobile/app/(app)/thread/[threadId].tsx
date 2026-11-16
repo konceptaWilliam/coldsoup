@@ -26,7 +26,6 @@ import { StatusControl } from "@/components/StatusControl";
 import { Avatar } from "@/components/Avatar";
 import { MessageBubble } from "@/components/MessageBubble";
 import { PollCard } from "@/components/PollCard";
-import { PollCreateModal } from "@/components/PollCreateModal";
 import { SMeterCard } from "@/components/SMeterCard";
 import { SMeterCreateModal } from "@/components/SMeterCreateModal";
 import { SystemMessage } from "@/components/SystemMessage";
@@ -55,7 +54,6 @@ export default function ThreadScreen() {
   const { threadId, title, status: statusParam, groupId } = useLocalSearchParams<{ threadId: string; title: string; status?: string; groupId?: string }>();
   const flatListRef = useRef<FlatList>(null);
   const [body, setBody] = useState("");
-  const [showPollCreate, setShowPollCreate] = useState(false);
   const [showSMeterCreate, setShowSMeterCreate] = useState(false);
   const [showAttachMenu, setShowAttachMenu] = useState(false);
   const [showVoiceRecord, setShowVoiceRecord] = useState(false);
@@ -256,12 +254,6 @@ export default function ThreadScreen() {
 
   const updateStatus = trpc.threads.updateStatus.useMutation({
     onSettled: () => utils.threads.list.invalidate(),
-  });
-  const createPoll = trpc.polls.create.useMutation({
-    onSuccess: () => {
-      setShowPollCreate(false);
-      utils.messages.list.invalidate({ threadId });
-    },
   });
   const createSmeter = trpc.smeters.create.useMutation({
     onSuccess: () => {
@@ -904,7 +896,6 @@ export default function ThreadScreen() {
         onPhoto={pickImages}
         onFile={pickDocument}
         onVoice={() => setShowVoiceRecord(true)}
-        onPoll={() => setShowPollCreate(true)}
         onSMeter={() => setShowSMeterCreate(true)}
         onCamera={Platform.OS !== "web" ? takePhoto : undefined}
       />
@@ -931,13 +922,6 @@ export default function ThreadScreen() {
         })}
         onEdit={() => actionTarget && startEdit(actionTarget.id, actionTarget.body)}
         onDelete={() => actionTarget && confirmDelete(actionTarget.id)}
-      />
-
-      <PollCreateModal
-        visible={showPollCreate}
-        isPending={createPoll.isPending}
-        onSubmit={(question, options) => createPoll.mutate({ threadId, question, options })}
-        onClose={() => setShowPollCreate(false)}
       />
 
       <SMeterCreateModal

@@ -258,7 +258,6 @@
     "photoLibrary": "Photo Library",
     "file": "File",
     "voice": "Voice Message",
-    "poll": "Poll",
     "smeter": "S-meter"
   },
   "voice": {
@@ -271,17 +270,9 @@
     "permissionBody": "Enable microphone access in Settings to record a voice message."
   },
   "poll": {
-    "create": "Create poll",
-    "question": "Question",
-    "questionPlaceholder": "What do you want to ask?",
-    "options": "Options",
-    "optionsHint": "(optional — anyone can add more later)",
-    "optionPlaceholder": "Option {{index}}",
     "optionText": "Option text…",
     "add": "Add",
     "addOption": "+ add option",
-    "sending": "Sending…",
-    "sendPoll": "Send poll",
     "votes_one": "{{count}} vote",
     "votes_other": "{{count}} votes",
     "noVotes": "No votes"

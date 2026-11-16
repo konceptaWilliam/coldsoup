@@ -8,14 +8,13 @@ interface Props {
   onPhoto: () => void;
   onFile: () => void;
   onVoice: () => void;
-  onPoll: () => void;
   onSMeter: () => void;
   onCamera?: () => void;
 }
 
 const OPTIONS_BOTTOM = 70; // sits just above the composer row
 
-export function AttachMenu({ visible, onClose, onPhoto, onFile, onVoice, onPoll, onSMeter, onCamera }: Props) {
+export function AttachMenu({ visible, onClose, onPhoto, onFile, onVoice, onSMeter, onCamera }: Props) {
   const { c } = useTheme();
   const { t } = useTranslation();
   function choose(fn: () => void) {
@@ -52,12 +51,6 @@ export function AttachMenu({ visible, onClose, onPhoto, onFile, onVoice, onPoll,
             style={({ pressed }) => ({ paddingHorizontal: 14, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: c.border, opacity: pressed ? 0.6 : 1 })}
           >
             <Text style={{ fontFamily: "monospace", fontSize: 12, color: c.ink, letterSpacing: 0.5 }}>{t("attach.voice")}</Text>
-          </Pressable>
-          <Pressable
-            onPress={() => choose(onPoll)}
-            style={({ pressed }) => ({ paddingHorizontal: 14, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: c.border, opacity: pressed ? 0.6 : 1 })}
-          >
-            <Text style={{ fontFamily: "monospace", fontSize: 12, color: c.ink, letterSpacing: 0.5 }}>{t("attach.poll")}</Text>
           </Pressable>
           <Pressable
             onPress={() => choose(onSMeter)}

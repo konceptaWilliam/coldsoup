@@ -55,121 +55,6 @@ function isScrolledNearBottom(container: HTMLElement): boolean {
   );
 }
 
-function PollCreateModal({
-  onSubmit,
-  onClose,
-  isPending,
-}: {
-  onSubmit: (question: string, options: string[]) => void;
-  onClose: () => void;
-  isPending: boolean;
-}) {
-  const [question, setQuestion] = useState("");
-  const [options, setOptions] = useState<string[]>([""]);
-
-  function setOption(i: number, val: string) {
-    setOptions((prev) => prev.map((o, idx) => (idx === i ? val : o)));
-  }
-
-  function addOption() {
-    setOptions((prev) => [...prev, ""]);
-  }
-
-  function removeOption(i: number) {
-    setOptions((prev) => prev.filter((_, idx) => idx !== i));
-  }
-
-  function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!question.trim()) return;
-    const validOptions = options.map((o) => o.trim()).filter(Boolean);
-    onSubmit(question.trim(), validOptions);
-  }
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-ink/20"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <div className="bg-surface border border-border w-full max-w-[calc(100vw-16px)] sm:max-w-md mx-2 sm:mx-4 p-4 sm:p-6 max-h-[90vh] overflow-y-auto">
-        <h2 className="font-mono text-sm font-semibold text-ink mb-4">
-          Create poll
-        </h2>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block font-mono text-xs text-muted uppercase tracking-wider mb-1.5">
-              Question
-            </label>
-            <input
-              autoFocus
-              value={question}
-              onChange={(e) => setQuestion(e.target.value)}
-              maxLength={500}
-              placeholder="What do you want to ask?"
-              className="w-full border border-border bg-surface-2 px-3 py-2 text-base md:text-sm text-ink placeholder:text-muted focus:outline-none focus:border-ink transition-colors"
-            />
-          </div>
-          <div>
-            <label className="block font-mono text-xs text-muted uppercase tracking-wider mb-1.5">
-              Options{" "}
-              <span className="normal-case text-muted-2">
-                (optional — anyone can add more later)
-              </span>
-            </label>
-            <div className="space-y-1.5">
-              {options.map((opt, i) => (
-                <div key={i} className="flex gap-1.5">
-                  <input
-                    value={opt}
-                    onChange={(e) => setOption(i, e.target.value)}
-                    maxLength={200}
-                    placeholder={`Option ${i + 1}`}
-                    className="flex-1 border border-border bg-surface-2 px-3 py-1.5 text-base md:text-sm text-ink placeholder:text-muted focus:outline-none focus:border-ink transition-colors"
-                  />
-                  {options.length > 1 && (
-                    <button
-                      type="button"
-                      onClick={() => removeOption(i)}
-                      className="font-mono text-base text-muted hover:text-ink px-1"
-                    >
-                      ×
-                    </button>
-                  )}
-                </div>
-              ))}
-            </div>
-            <button
-              type="button"
-              onClick={addOption}
-              className="mt-1.5 font-mono text-[11px] text-muted hover:text-ink transition-colors"
-            >
-              + add option
-            </button>
-          </div>
-          <div className="flex gap-2 justify-end pt-1">
-            <button
-              type="button"
-              onClick={onClose}
-              className="font-mono text-sm text-muted hover:text-ink px-4 py-2 transition-colors"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={!question.trim() || isPending}
-              className="bg-ink text-surface font-mono text-sm px-4 py-2 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-ink/90 transition-colors"
-            >
-              {isPending ? "Sending…" : "Send poll"}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
-}
-
 function formatDate(dateStr: string): string {
   const d = new Date(dateStr);
   const today = new Date();
@@ -1237,7 +1122,6 @@ export function ThreadDetail({
   } | null>(null);
   const [activeTooltip, setActiveTooltip] = useState<string | null>(null);
   const tooltipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [showPollCreate, setShowPollCreate] = useState(false);
   const [showSMeterCreate, setShowSMeterCreate] = useState(false);
   const [profileTarget, setProfileTarget] = useState<ProfileTarget | null>(null);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
@@ -1466,22 +1350,6 @@ export function ThreadDetail({
       if (reactionPressTimerRef.current) clearTimeout(reactionPressTimerRef.current);
     };
   }, []);
-
-  const createPoll = trpc.polls.create.useMutation({
-    onSuccess: (msg) => {
-      haptic("light");
-      thread.addServerMessage({
-        ...(msg as unknown as Message),
-        poll_id: (msg as unknown as { poll_id: string | null }).poll_id ?? null,
-        reactions: REACTION_DEFAULTS.map((r) => ({ ...r })),
-      });
-      // The realtime INSERT echo fetches the poll payload and upserts it.
-      setShowPollCreate(false);
-    },
-    onError: () => {
-      forceScrollOnNextMessageRef.current = false;
-    },
-  });
 
   const createSmeter = trpc.smeters.create.useMutation({
     onSuccess: async (msg) => {
@@ -1988,7 +1856,6 @@ export function ThreadDetail({
       gazeFieldRef.current?.refresh();
     },
     onEditLastOwn: editLastOwn,
-    onOpenPoll: () => setShowPollCreate(true),
     onOpenSmeter: () => setShowSMeterCreate(true),
     onReopen: () => {
       setThreadStatus("OPEN");
@@ -2333,19 +2200,6 @@ export function ThreadDetail({
         />
       )}
 
-      {/* Poll create modal */}
-      {showPollCreate && (
-        <PollCreateModal
-          onSubmit={(question, options) => {
-            forceScrollOnNextMessageRef.current = true;
-            scrollToBottom("smooth");
-            createPoll.mutate({ threadId, question, options });
-          }}
-          onClose={() => setShowPollCreate(false)}
-          isPending={createPoll.isPending}
-        />
-      )}
-
       {/* S-meter create modal */}
       {showSMeterCreate && (
         <SMeterCreateModal
@@ -2545,7 +2399,6 @@ export function ThreadDetail({
         onTyping={composerActions.onTyping}
         onGaze={composerActions.onGaze}
         onEditLastOwn={composerActions.onEditLastOwn}
-        onOpenPoll={composerActions.onOpenPoll}
         onOpenSmeter={composerActions.onOpenSmeter}
         onReopen={composerActions.onReopen}
         overlay={

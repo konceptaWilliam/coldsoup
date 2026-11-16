@@ -11,7 +11,7 @@ Installable as a PWA with push notifications, real-time messaging, and an offlin
 - **Groups & threads** — conversations live in topic threads inside groups; no DMs or channels.
 - **Status workflow** — every thread is OPEN, URGENT, or DONE, visible at a glance.
 - **Real-time** — messages, status changes, typing indicators, read receipts, and polls update live (Supabase Realtime).
-- **Rich messages** — replies, reactions, image/audio/video/file attachments (client-side compressed), inline link previews, and polls.
+- **Rich messages** — replies, reactions, image/audio/video/file attachments (client-side compressed), inline link previews, and S-meters (legacy polls still render).
 - **Passwordless invites** — admins invite by email; a single magic link signs the user in and adds them to the group.
 - **PWA** — installable, fullscreen, offline-capable (persisted query cache + cached media), with **web push notifications** and home-screen **badges**.
 - **Search** — across thread titles and message bodies, scoped to your groups.

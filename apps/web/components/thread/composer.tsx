@@ -106,7 +106,6 @@ export type ComposerProps = {
   onTyping: () => void;
   onGaze: (active: boolean) => void;
   onEditLastOwn: () => boolean;
-  onOpenPoll: () => void;
   onOpenSmeter: () => void;
   onReopen: () => void;
   overlay: ReactNode;
@@ -125,7 +124,6 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     onTyping,
     onGaze,
     onEditLastOwn,
-    onOpenPoll,
     onOpenSmeter,
     onReopen,
     overlay,
@@ -561,7 +559,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
               type="button"
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => setAttachMenuOpen((o) => !o)}
-              title="Attach or create poll"
+              title="Attach or create S-meter"
               className="h-11 w-11 md:h-10 md:w-10 flex items-center justify-center text-muted hover:text-pastel-ink transition-colors font-mono text-lg leading-none"
             >
               +
@@ -581,15 +579,6 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                     }}
                   >
                     Attach a file
-                  </button>
-                  <button
-                    className="w-full text-left px-3 py-2 font-mono text-[12px] text-ink hover:bg-surface-2 border-b border-border"
-                    onClick={() => {
-                      setAttachMenuOpen(false);
-                      onOpenPoll();
-                    }}
-                  >
-                    Create a poll
                   </button>
                   <button
                     className="w-full text-left px-3 py-2 font-mono text-[12px] text-ink hover:bg-surface-2"
