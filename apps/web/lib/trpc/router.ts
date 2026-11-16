@@ -8,6 +8,7 @@ import { profileRouter } from "./routers/profile";
 import { searchRouter } from "./routers/search";
 import { pollsRouter } from "./routers/polls";
 import { smetersRouter } from "./routers/smeters";
+import { rpsRouter } from "./routers/rps";
 import { notificationsRouter } from "./routers/notifications";
 import { linksRouter } from "./routers/links";
 import { calendarRouter } from "./routers/calendar";
@@ -22,6 +23,7 @@ export const appRouter = router({
   search: searchRouter,
   polls: pollsRouter,
   smeters: smetersRouter,
+  rps: rpsRouter,
   notifications: notificationsRouter,
   links: linksRouter,
   calendar: calendarRouter,
