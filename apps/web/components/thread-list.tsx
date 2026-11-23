@@ -614,7 +614,10 @@ export function ThreadList({ groupId, groupName }: { groupId: string; groupName:
                   // Keep new-tab / modified clicks native.
                   if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
                   e.preventDefault();
-                  navigate(href);
+                  // Let the :active press state paint before the thread pane
+                  // mounts (rAF + task = after paint), so the tap's INP is
+                  // the cheap feedback frame, not the pane render.
+                  requestAnimationFrame(() => setTimeout(() => navigate(href), 0));
                 }}
                 className={`block py-3 border-b border-border transition-all duration-150 active:bg-border/50 active:transition-none ${
                   isDone ? "opacity-35" : dimRead ? "opacity-60" : ""

@@ -1,6 +1,14 @@
 "use client";
 
-import { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from "react";
+import {
+  useState,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useMemo,
+  useCallback,
+  startTransition,
+} from "react";
 import { Avatar } from "./avatar";
 import type { Expression } from "blobatar";
 import { happy, love, sad, thinking } from "blobatar/expression";
@@ -46,6 +54,10 @@ type ProfileTarget = {
 };
 
 const BOTTOM_THRESHOLD_PX = 120;
+// Rows rendered on the first (tap-blocking) frame when a thread opens; the
+// rest mount in a transition right after paint. Keeps the open-thread tap's
+// INP down on long threads.
+const INITIAL_ROWS = 15;
 // Stable empty defaults so memos keyed on them don't recompute every render.
 const EMPTY_MEMBERS: { id: string; display_name: string; avatar_url: string | null; role: string }[] = [];
 const EMPTY_RECEIPTS: never[] = [];
@@ -1133,6 +1145,10 @@ export function ThreadDetail({
   const [jumpFlashId, setJumpFlashId] = useState<string | null>(null);
   const jumpBusyRef = useRef(false);
   const [hasNewMessages, setHasNewMessages] = useState(false);
+  // False only for the first frame(s) after mount: render the newest
+  // INITIAL_ROWS so the tap that opened the thread paints fast. A deep link
+  // (highlight) needs every row in the DOM to find its target, so skip it.
+  const [renderAll, setRenderAll] = useState(!!highlightMessageId);
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const composerApi = useRef<ComposerHandle>(null);
@@ -1233,7 +1249,10 @@ export function ThreadDetail({
   const preLoadScrollHeight = useRef<number | null>(null);
   const loadOlderRef = useRef(thread.loadOlder);
   loadOlderRef.current = thread.loadOlder;
-  const canLoadOlder = thread.hasMore && !thread.isLoadingOlder && !thread.olderError;
+  // Gated on renderAll: with only the newest rows mounted the sentinel sits in
+  // view and would page in history nobody scrolled to.
+  const canLoadOlder =
+    renderAll && thread.hasMore && !thread.isLoadingOlder && !thread.olderError;
   useEffect(() => {
     const root = scrollContainerRef.current;
     const target = olderSentinelRef.current;
@@ -1254,7 +1273,27 @@ export function ThreadDetail({
     if (!root || preLoadScrollHeight.current === null) return;
     root.scrollTop += root.scrollHeight - preLoadScrollHeight.current;
     preLoadScrollHeight.current = null;
-  }, [thread.pageCount]);
+  }, [thread.pageCount, renderAll]);
+
+  // Mount the remaining rows once the first frame has painted (rAF + task =
+  // after paint), as an interruptible transition. Rows are prepended above
+  // the visible ones, so anchor the viewport like an older-page load.
+  useEffect(() => {
+    if (renderAll) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const raf = requestAnimationFrame(() => {
+      timer = setTimeout(() => {
+        const root = scrollContainerRef.current;
+        if (root) preLoadScrollHeight.current = root.scrollHeight;
+        startTransition(() => setRenderAll(true));
+      }, 0);
+    });
+    return () => {
+      cancelAnimationFrame(raf);
+      if (timer) clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Keep the newest message in view while content above it grows (images,
   // link previews, polls loading) — only when the user is at the bottom.
@@ -1988,8 +2027,11 @@ export function ThreadDetail({
   }, [messages, myInfo, readReceipts]);
 
   const messagesByDate = useMemo(() => {
+    const rendered = renderAll
+      ? displayMessages
+      : displayMessages.slice(-INITIAL_ROWS);
     const groups: Array<{ date: string; messages: Message[] }> = [];
-    for (const msg of displayMessages) {
+    for (const msg of rendered) {
       const dateLabel = formatDate(msg.created_at);
       const last = groups[groups.length - 1];
       if (last && last.date === dateLabel) {
@@ -1999,7 +2041,7 @@ export function ThreadDetail({
       }
     }
     return groups;
-  }, [displayMessages]);
+  }, [displayMessages, renderAll]);
 
   const isDone = threadStatus === "DONE";
 
